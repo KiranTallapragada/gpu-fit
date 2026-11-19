@@ -27,6 +27,9 @@ class ModelSpec:
     linear_conv_elems: int = 0   # the convolution part of that state (kept in model dtype)
     state_dtype_bytes: int = 2
     multimodal: bool = False     # has a vision/audio encoder that vLLM also profiles
+    moe_experts: int = 0         # routed experts per MoE layer (0 = dense model)
+    moe_topk: int = 0            # experts each token uses
+    expert_share: float = 0.0    # share of weight bytes that are routed experts
     mla_dim: Optional[int] = None  # DeepSeek-style latent KV: per-layer per-token width
     max_context: Optional[int] = None
     notes: list = field(default_factory=list)
@@ -72,6 +75,28 @@ def _linear_state_elems(c: dict) -> tuple:
         return 0, 0
     conv = (2 * kh * kd + vh * vd) * (c.get("linear_conv_kernel_dim", 4) - 1)
     return conv + vh * kd * vd, conv
+
+
+def _moe(c: dict) -> tuple:
+    """(experts, top-k, share of parameters in routed experts), estimated from the config."""
+    experts = c.get("num_experts") or c.get("n_routed_experts") or c.get("num_local_experts") or 0
+    topk = c.get("num_experts_per_tok") or 0
+    if not (experts and topk):
+        return 0, 0, 0.0
+    hidden, layers = c["hidden_size"], c["num_hidden_layers"]
+    inter = c.get("moe_intermediate_size") or c.get("intermediate_size")
+    dense = (c.get("first_k_dense_replace") or 0) + len(c.get("mlp_only_layers") or [])
+    moe_layers = layers - dense
+    routed = moe_layers * experts * 3 * hidden * inter
+    heads = c.get("num_attention_heads") or 1
+    kv = c.get("num_key_value_heads") or heads
+    hd = c.get("head_dim") or hidden // heads
+    attn = layers * (2 * hidden * heads * hd + 2 * hidden * kv * hd)
+    shared_inter = (c.get("shared_expert_intermediate_size")
+                    or (c.get("n_shared_experts") or 0) * inter)
+    shared = moe_layers * 3 * hidden * shared_inter + dense * 3 * hidden * c.get("intermediate_size", inter)
+    emb = c.get("vocab_size", 0) * hidden * (1 if c.get("tie_word_embeddings") else 2)
+    return experts, topk, routed / (routed + attn + shared + emb)
 
 
 def _fetch_json(url: str) -> dict:
@@ -145,7 +170,9 @@ def spec_from_config(name: str, config: dict, weight_bytes: int) -> ModelSpec:
         if not state:
             notes.append("recurrent state size unknown for this architecture; not counted")
 
+    experts, topk, share = _moe(c)
     return ModelSpec(
+        moe_experts=experts, moe_topk=topk, expert_share=round(share, 4),
         name=name, weight_bytes=weight_bytes, full_attn_layers=full, kv_heads=kv_heads,
         head_dim=head_dim, sliding_layers=sliding, sliding_window=window,
         linear_attn_layers=linear, linear_state_elems=state, linear_conv_elems=conv,

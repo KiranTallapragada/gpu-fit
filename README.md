@@ -2,7 +2,7 @@
 
 **[Try it in your browser →](https://kiran-tallapragada.pages.dev/gpu-fit/)** · no install, nothing leaves your browser
 
-**Will this LLM fit on this GPU, at this context length, for this many users?**
+**Will this LLM fit on this GPU, at this context length, for this many users, and how fast?**
 
 `gpu-fit` answers that before you rent the GPU. It reads the model's config and weight sizes
 from Hugging Face and works out vLLM's memory budget: weights, runtime overhead, KV cache, how
@@ -62,7 +62,7 @@ Most calculators multiply parameters by bytes and add a guess. Modern models bre
 ```
 gpu-fit MODEL [--gpu L40S | --gpu-mem-gib 48] [--tp 2] [--context 128k]
               [--concurrency 8] [--max-num-seqs 32] [--kv-cache-dtype fp8] [--util 0.9]
-              [--overhead-gib 2.0] [--json]
+              [--overhead-gib 2.0] [--bandwidth-gbs 864] [--json]
 ```
 
 - `MODEL`: a Hugging Face id, or a local folder with `config.json` and `*.safetensors`.
@@ -80,6 +80,15 @@ KV pool   = memory × utilization − weights / tp − overhead
 KV/token  = 2 × full-attention layers × KV heads per GPU × head dim × dtype bytes
 requests  = KV pool / (context × KV/token + sliding-window KV + recurrent state)
 ```
+
+## Speed estimates
+
+gpu-fit also estimates decode speed (tokens per second): for one user, and per user at your
+concurrency. Generating a token is memory-bound, so the estimate divides the GPU's memory
+bandwidth by what each step reads: the weights (for mixture-of-experts models, only the experts
+in use) plus every active request's KV cache, with a fixed per-layer cost that matters for small
+MoE models. Prompt processing is not included. It's a planning estimate: real numbers from your
+hardware are welcome (see CONTRIBUTING.md).
 
 ## Accuracy, measured
 
@@ -107,13 +116,16 @@ Every measurement improves the defaults for everyone.
 
 ## Roadmap
 
-- [x] Measured accuracy on real hardware (L40S)
-- [ ] More GPUs (L4, H100) and models (Llama, Mistral, Gemma) from community results
-- [ ] FP8 KV cache measurements
-- [ ] Throughput estimate (tokens/s) from memory bandwidth
+- [x] Memory model calibrated on real hardware (L40S)
+- [x] Hybrid `--max-num-seqs` limit warning
+- [x] Browser calculator
+- [x] Decode speed estimate, MoE-aware
+- [ ] Speed calibrated against measured vLLM throughput
+- [ ] More GPUs measured (L4, H100) and models (Llama, Gemma, Mistral) from community results
+- [ ] Prompt-processing (prefill) time and time-to-first-token
+- [ ] Cost per million tokens for cloud GPUs
 - [ ] SGLang and TensorRT-LLM memory models
-- [ ] Web version
-- [ ] Vision encoder and LoRA memory
+- [ ] LoRA adapters and speculative decoding
 
 ## License
 

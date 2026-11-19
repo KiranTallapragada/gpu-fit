@@ -1,6 +1,6 @@
 import unittest
 
-from gpu_fit.calc import GIB, estimate
+from gpu_fit.calc import GIB, estimate, estimate_speed, weight_bytes_read
 from gpu_fit.cli import parse_tokens
 from gpu_fit.model import spec_from_config, weight_bytes_from_counts
 
@@ -107,6 +107,32 @@ class TestEstimate(unittest.TestCase):
         c = estimate(text, 80, 8192, max_num_seqs=256).overhead_gib
         self.assertLess(a, b)
         self.assertLess(a, c)
+
+    def test_speed_dense_is_bandwidth_bound(self):
+        s = spec_from_config("dense", DENSE, 16 * 10**9)
+        fast = estimate_speed(s, 3350, 4096).single_tok_s
+        slow = estimate_speed(s, 864, 4096).single_tok_s
+        self.assertGreater(fast, 3 * slow)            # ~3.9x the bandwidth, minus fixed overhead
+        self.assertLess(fast, 3350e9 / (16 * 10**9))   # never above the raw bandwidth limit
+
+    def test_speed_batch_raises_total_lowers_per_user(self):
+        s = spec_from_config("dense", DENSE, 16 * 10**9)
+        one = estimate_speed(s, 864, 8192, users=1)
+        eight = estimate_speed(s, 864, 8192, users=8)
+        self.assertGreater(eight.total_tok_s, one.total_tok_s)
+        self.assertLess(eight.per_user_tok_s, one.per_user_tok_s)
+
+    def test_moe_reads_only_active_experts(self):
+        moe = {**DENSE, "num_experts": 128, "num_experts_per_tok": 8, "moe_intermediate_size": 768,
+               "vocab_size": 151936}
+        s = spec_from_config("moe", moe, 60 * GIB)
+        self.assertEqual((s.moe_experts, s.moe_topk), (128, 8))
+        self.assertGreater(s.expert_share, 0.5)
+        self.assertLess(weight_bytes_read(s, 1), 0.4 * s.weight_bytes)
+        self.assertGreater(weight_bytes_read(s, 64), weight_bytes_read(s, 1))  # bigger batch, more experts
+
+    def test_no_speed_without_bandwidth(self):
+        self.assertIsNone(estimate_speed(spec_from_config("dense", DENSE, GIB), 0, 4096))
 
     def test_parse_tokens(self):
         self.assertEqual(parse_tokens("128k"), 131072)

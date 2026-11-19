@@ -99,3 +99,55 @@ def estimate(
         context=context, concurrent=concurrent, max_context_one_request=max(max_one, 0),
         max_num_seqs=max_num_seqs, hybrid_slots=kv_tokens // block if block else 0,
     )
+
+
+# Decode speed. Generating a token is memory-bound: every step reads the weights it needs plus
+# each active request's KV cache. vLLM typically reaches ~75% of the card's bandwidth on decode;
+# tensor parallel loses a little more to GPU-to-GPU communication. A planning estimate, not a
+# benchmark: prefill (reading the prompt) and scheduling are not modelled.
+BANDWIDTH_EFFICIENCY = 0.75
+TP_COMM_EFFICIENCY = 0.85
+# Fixed cost per layer per decode step (kernel launches, expert routing, all-reduce). It is what
+# caps small-active MoE models well below their bandwidth limit.
+LAYER_OVERHEAD_S = 15e-6
+MOE_LAYER_OVERHEAD_S = 60e-6
+TP_LAYER_OVERHEAD_S = 20e-6
+
+
+@dataclass
+class Speed:
+    single_tok_s: float      # one request alone, at the given context
+    batch: int               # requests decoding together
+    total_tok_s: float       # all requests together
+    per_user_tok_s: float    # each request when `batch` run at once
+
+
+def weight_bytes_read(spec: ModelSpec, batch: int) -> float:
+    """Bytes of weights one decode step reads. MoE models only touch the experts in use."""
+    if not spec.moe_experts:
+        return spec.weight_bytes
+    p = spec.moe_topk / spec.moe_experts
+    touched = 1 - (1 - p) ** max(batch, 1)  # share of experts hit by at least one request
+    return spec.weight_bytes * ((1 - spec.expert_share) + spec.expert_share * touched)
+
+
+def estimate_speed(spec: ModelSpec, bandwidth_gbs: float, context: int, tp: int = 1,
+                   kv_dtype_bytes: int = 2, users: int = 1) -> Optional[Speed]:
+    if not bandwidth_gbs:
+        return None
+    full, swa = spec.kv_bytes_per_token(kv_dtype_bytes, tp)
+    window = spec.sliding_window or context
+    kv_per_request = context * full + min(context, window) * swa + spec.linear_state_bytes(tp)
+    bw = bandwidth_gbs * 1e9 * BANDWIDTH_EFFICIENCY * (TP_COMM_EFFICIENCY if tp > 1 else 1.0)
+
+    layers = spec.full_attn_layers + spec.sliding_layers + spec.linear_attn_layers
+    fixed = layers * ((MOE_LAYER_OVERHEAD_S if spec.moe_experts else LAYER_OVERHEAD_S)
+                      + (TP_LAYER_OVERHEAD_S if tp > 1 else 0.0))
+
+    def step_seconds(batch: int) -> float:
+        return (weight_bytes_read(spec, batch) / tp + batch * kv_per_request) / bw + fixed
+
+    batch = max(users, 1)
+    single = 1 / step_seconds(1)
+    total = batch / step_seconds(batch)
+    return Speed(single_tok_s=single, batch=batch, total_tok_s=total, per_user_tok_s=total / batch)

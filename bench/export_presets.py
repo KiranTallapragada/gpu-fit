@@ -42,7 +42,8 @@ def main() -> None:
         d.pop("notes", None)
         models.append(d)
         print(f"ok   {mid}: {spec.weight_bytes / 1024**3:.1f} GiB", file=sys.stderr)
-    gpus = [{"name": g.name, "memory_mib": g.memory_mib} for g in GPUS.values()]
+    gpus = [{"name": g.name, "memory_mib": g.memory_mib, "bandwidth_gbs": g.bandwidth_gbs}
+            for g in GPUS.values()]
     json.dump({"models": models, "gpus": gpus}, open(sys.argv[1], "w"), indent=1)
 
 

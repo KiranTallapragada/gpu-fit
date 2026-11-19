@@ -6,7 +6,7 @@ import sys
 from dataclasses import asdict
 
 from . import __version__
-from .calc import VLLM_DEFAULT_MAX_NUM_SEQS, estimate
+from .calc import VLLM_DEFAULT_MAX_NUM_SEQS, estimate, estimate_speed
 from .gpus import GPUS, get_gpu
 from .model import load_model
 
@@ -45,7 +45,7 @@ def _seqs(args) -> int:
     return args.concurrency or VLLM_DEFAULT_MAX_NUM_SEQS
 
 
-def report_one(spec, gpu_name, gpu_mem, args) -> int:
+def report_one(spec, gpu_name, gpu_mem, args, bandwidth_gbs=0) -> int:
     kv_bytes = 1 if args.kv_cache_dtype == "fp8" else 2
     fit = estimate(spec, gpu_mem, args.context, args.tp, kv_bytes, args.util, args.overhead_gib,
                    _seqs(args))
@@ -53,7 +53,10 @@ def report_one(spec, gpu_name, gpu_mem, args) -> int:
     ok = fit.kv_pool_gib > 0 and fit.concurrent >= need and fit.slots_ok
 
     if args.json:
-        print(json.dumps({"model": spec.name, "gpu": gpu_name, "fits": ok, **asdict(fit)}, indent=2))
+        sp = estimate_speed(spec, bandwidth_gbs, args.context, args.tp, kv_bytes,
+                            max(1, min(need, int(fit.concurrent))) if fit.concurrent >= 1 else 1)
+        print(json.dumps({"model": spec.name, "gpu": gpu_name, "fits": ok, **asdict(fit),
+                          "speed": asdict(sp) if sp else None}, indent=2))
         return 0 if ok else 1
 
     print(f"\n{spec.name}  on  {args.tp}× {gpu_name} ({gpu_mem:.1f} GiB each)")
@@ -71,10 +74,22 @@ def report_one(spec, gpu_name, gpu_mem, args) -> int:
     ]
     if fit.hybrid_slots:
         rows.append(("Hybrid state slots (max seqs)", f"{fit.hybrid_slots}"))
+    users = max(1, min(need, int(fit.concurrent))) if fit.concurrent >= 1 else 1
+    speed = estimate_speed(spec, bandwidth_gbs, args.context, args.tp, kv_bytes, users)
+    if speed and fit.kv_pool_gib > 0:
+        rows.append(("Speed, one user (est.)", f"~{speed.single_tok_s:,.0f} tokens/s"))
+        if speed.batch > 1:
+            rows.append((f"Speed, {speed.batch} users (est.)",
+                         f"~{speed.total_tok_s:,.0f} tokens/s total, ~{speed.per_user_tok_s:,.0f} each"))
     for label, value in rows:
         print(f"  {label:<30} {value}")
     for note in spec.notes:
         print(f"  note: {note}")
+    if spec.max_context and args.context > spec.max_context:
+        print(f"  note: {spec.name} natively supports {spec.max_context:,} tokens; longer contexts"
+              " need RoPE scaling (e.g. YaRN) set in vLLM")
+    if speed and fit.kv_pool_gib > 0:
+        print("  note: speed is a decode estimate from memory bandwidth; prompt processing not included")
 
     if fit.kv_pool_gib > 0 and not fit.slots_ok:
         print(f"\n✗ vLLM will refuse to start: --max-num-seqs {fit.max_num_seqs} is more than the"
@@ -83,8 +98,10 @@ def report_one(spec, gpu_name, gpu_mem, args) -> int:
     elif fit.kv_pool_gib <= 0:
         print("\n✗ Does not fit: the weights alone exceed the budget. Try --tp, a bigger GPU or a quantised model.")
     elif not ok:
+        tips = ("a shorter context or more GPUs" if args.kv_cache_dtype == "fp8"
+                else "--kv-cache-dtype fp8, a shorter context or more GPUs")
         print(f"\n✗ Fits, but only {fit.concurrent:.1f} requests at {_fmt_tokens(args.context)} tokens"
-              f" (you asked for {need}). Try --kv-cache-dtype fp8, a shorter context or more GPUs.")
+              f" (you asked for {need}). Try {tips}.")
     else:
         print(f"\n✓ Fits. Suggested command:\n\n  {_command(spec.name, fit, args)}")
     print()
@@ -136,16 +153,17 @@ def main(argv=None) -> int:
     p.add_argument("--kv-cache-dtype", choices=["auto", "fp8"], default="auto")
     p.add_argument("--util", type=float, default=0.9, help="gpu_memory_utilization (default 0.9)")
     p.add_argument("--overhead-gib", type=float, help="runtime overhead per GPU (default: measured, by model type)")
+    p.add_argument("--bandwidth-gbs", type=float, help="GPU memory bandwidth in GB/s (default: from catalog)")
     p.add_argument("--json", action="store_true", help="machine-readable output")
     p.add_argument("--version", action="version", version=f"gpu-fit {__version__}")
     args = p.parse_args(argv)
 
     spec = load_model(args.model)
     if args.gpu_mem_gib:
-        return report_one(spec, "custom", args.gpu_mem_gib, args)
+        return report_one(spec, "custom", args.gpu_mem_gib, args, args.bandwidth_gbs or 0)
     if args.gpu:
         gpu = get_gpu(args.gpu)
-        return report_one(spec, gpu.name, gpu.memory_gib, args)
+        return report_one(spec, gpu.name, gpu.memory_gib, args, args.bandwidth_gbs or gpu.bandwidth_gbs)
     return report_scan(spec, args)
 
 
