@@ -6,7 +6,7 @@ import sys
 from dataclasses import asdict
 
 from . import __version__
-from .calc import estimate
+from .calc import VLLM_DEFAULT_MAX_NUM_SEQS, estimate
 from .gpus import GPUS, get_gpu
 from .model import load_model
 
@@ -33,17 +33,24 @@ def _command(model: str, fit, args) -> str:
         parts.append(f"--tensor-parallel-size {fit.tp}")
     if args.kv_cache_dtype == "fp8":
         parts.append("--kv-cache-dtype fp8")
-    parts.append(f"--max-num-seqs {max(1, int(fit.concurrent)) if args.concurrency is None else args.concurrency}")
+    parts.append(f"--max-num-seqs {fit.max_num_seqs}")
     if args.util != 0.9:
         parts.append(f"--gpu-memory-utilization {args.util}")
     return " \\\n  ".join(parts)
 
 
+def _seqs(args) -> int:
+    if args.max_num_seqs:
+        return args.max_num_seqs
+    return args.concurrency or VLLM_DEFAULT_MAX_NUM_SEQS
+
+
 def report_one(spec, gpu_name, gpu_mem, args) -> int:
     kv_bytes = 1 if args.kv_cache_dtype == "fp8" else 2
-    fit = estimate(spec, gpu_mem, args.context, args.tp, kv_bytes, args.util, args.overhead_gib)
+    fit = estimate(spec, gpu_mem, args.context, args.tp, kv_bytes, args.util, args.overhead_gib,
+                   _seqs(args))
     need = args.concurrency or 1
-    ok = fit.kv_pool_gib > 0 and fit.concurrent >= need
+    ok = fit.kv_pool_gib > 0 and fit.concurrent >= need and fit.slots_ok
 
     if args.json:
         print(json.dumps({"model": spec.name, "gpu": gpu_name, "fits": ok, **asdict(fit)}, indent=2))
@@ -55,18 +62,25 @@ def report_one(spec, gpu_name, gpu_mem, args) -> int:
     rows = [
         ("vLLM budget per GPU", f"{fit.budget_gib:6.1f} GiB"),
         ("  weights", f"{fit.weights_gib:6.1f} GiB"),
-        ("  runtime overhead (assumed)", f"{fit.overhead_gib:6.1f} GiB"),
+        ("  runtime overhead", f"{fit.overhead_gib:6.1f} GiB"),
         ("  left for KV cache", f"{fit.kv_pool_gib:6.1f} GiB"),
         ("KV cache capacity", f"{_fmt_tokens(fit.kv_tokens)} tokens"),
         ("Requests at full context", f"{fit.concurrent:.1f}"),
         ("Longest single request", f"{_fmt_tokens(fit.max_context_one_request)} tokens"),
+        ("--max-num-seqs", f"{fit.max_num_seqs}"),
     ]
+    if fit.hybrid_slots:
+        rows.append(("Hybrid state slots (max seqs)", f"{fit.hybrid_slots}"))
     for label, value in rows:
         print(f"  {label:<30} {value}")
     for note in spec.notes:
         print(f"  note: {note}")
 
-    if fit.kv_pool_gib <= 0:
+    if fit.kv_pool_gib > 0 and not fit.slots_ok:
+        print(f"\n✗ vLLM will refuse to start: --max-num-seqs {fit.max_num_seqs} is more than the"
+              f" {fit.hybrid_slots} recurrent-state slots this hybrid model gets."
+              f" Use --max-num-seqs {fit.hybrid_slots} or lower.")
+    elif fit.kv_pool_gib <= 0:
         print("\n✗ Does not fit: the weights alone exceed the budget. Try --tp, a bigger GPU or a quantised model.")
     elif not ok:
         print(f"\n✗ Fits, but only {fit.concurrent:.1f} requests at {_fmt_tokens(args.context)} tokens"
@@ -83,8 +97,9 @@ def report_scan(spec, args) -> int:
     results = []
     for gpu in GPUS.values():
         for tp in TP_SIZES:
-            fit = estimate(spec, gpu.memory_gib, args.context, tp, kv_bytes, args.util, args.overhead_gib)
-            if fit.kv_pool_gib > 0 and fit.concurrent >= need:
+            fit = estimate(spec, gpu.memory_gib, args.context, tp, kv_bytes, args.util,
+                           args.overhead_gib, _seqs(args))
+            if fit.kv_pool_gib > 0 and fit.concurrent >= need and fit.slots_ok:
                 results.append((gpu, fit))
                 break
         else:
@@ -116,9 +131,11 @@ def main(argv=None) -> int:
     p.add_argument("--context", type=parse_tokens, default=parse_tokens("32k"),
                    help="tokens per request, e.g. 32k, 128k (default 32k)")
     p.add_argument("--concurrency", type=int, help="requests at full context you need at once")
+    p.add_argument("--max-num-seqs", type=int,
+                   help="vLLM request slots (default: --concurrency, else vLLM's 256)")
     p.add_argument("--kv-cache-dtype", choices=["auto", "fp8"], default="auto")
     p.add_argument("--util", type=float, default=0.9, help="gpu_memory_utilization (default 0.9)")
-    p.add_argument("--overhead-gib", type=float, help="runtime overhead per GPU (default 2.0)")
+    p.add_argument("--overhead-gib", type=float, help="runtime overhead per GPU (default: measured, by model type)")
     p.add_argument("--json", action="store_true", help="machine-readable output")
     p.add_argument("--version", action="version", version=f"gpu-fit {__version__}")
     args = p.parse_args(argv)

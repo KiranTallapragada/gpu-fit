@@ -62,7 +62,7 @@ class TestEstimate(unittest.TestCase):
         s = spec_from_config("dense", DENSE, 16 * GIB)
         a = estimate(s, 80, 8192, kv_dtype_bytes=2)
         b = estimate(s, 80, 8192, kv_dtype_bytes=1)
-        self.assertEqual(b.kv_tokens, a.kv_tokens * 2)
+        self.assertAlmostEqual(b.kv_tokens, a.kv_tokens * 2, delta=2)  # integer rounding
 
     def test_does_not_fit_when_weights_exceed_budget(self):
         s = spec_from_config("dense", DENSE, 60 * GIB)
@@ -78,6 +78,35 @@ class TestEstimate(unittest.TestCase):
     def test_single_request_capped_by_model_max(self):
         s = spec_from_config("dense", DENSE, 1 * GIB)
         self.assertEqual(estimate(s, 192, 8192).max_context_one_request, 131072)
+
+    def test_hybrid_block_matches_vllm_state_padding(self):
+        s = spec_from_config("hybrid", HYBRID, 28 * GIB)
+        # fp32 recurrent matrix + bf16 conv state per layer, over 4096 attention bytes/token
+        conv = (2 * 16 * 128 + 48 * 128) * 3
+        state = 48 * 128 * 128 * 4 + conv * 2
+        self.assertEqual(s.hybrid_block_tokens(2), -(-(-(-state // 4096)) // 16) * 16)
+        self.assertEqual(s.hybrid_block_tokens(2), 784)
+
+    def test_hybrid_slots_block_too_many_seqs(self):
+        s = spec_from_config("hybrid", HYBRID, 28 * GIB)
+        f = estimate(s, 45, 32768, max_num_seqs=256)
+        self.assertGreater(f.hybrid_slots, 0)
+        self.assertFalse(f.slots_ok)
+        self.assertFalse(f.fits)
+        self.assertTrue(estimate(s, 45, 32768, max_num_seqs=32).slots_ok)
+
+    def test_dense_models_have_no_slot_limit(self):
+        s = spec_from_config("dense", DENSE, 16 * GIB)
+        self.assertEqual(estimate(s, 80, 8192).hybrid_slots, 0)
+
+    def test_overhead_by_model_type_and_slots(self):
+        text = spec_from_config("dense", DENSE, 16 * GIB)
+        vision = spec_from_config("vl", {**DENSE, "vision_config": {}}, 16 * GIB)
+        a = estimate(text, 80, 8192, max_num_seqs=32).overhead_gib
+        b = estimate(vision, 80, 8192, max_num_seqs=32).overhead_gib
+        c = estimate(text, 80, 8192, max_num_seqs=256).overhead_gib
+        self.assertLess(a, b)
+        self.assertLess(a, c)
 
     def test_parse_tokens(self):
         self.assertEqual(parse_tokens("128k"), 131072)

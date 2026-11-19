@@ -9,14 +9,8 @@ import sys
 from gpu_fit.calc import estimate
 from gpu_fit.model import load_model
 
-# Folder names used on the benchmark host → Hugging Face ids.
-MODEL_IDS = {
-    "qwen3.8-27b-fp8": "Qwen/Qwen3.8-27B-FP8",
-    "qwen3.6-35b-a3b-fp8": "Qwen/Qwen3.6-35B-A3B-FP8",
-    "dl-Qwen3-8B": "Qwen/Qwen3-8B",
-    "dl-Qwen3-14B": "Qwen/Qwen3-14B",
-    "dl-Qwen3-32B-FP8": "Qwen/Qwen3-32B-FP8",
-}
+# Optional: map local folder names to Hugging Face ids if your results use folders.
+MODEL_IDS: dict = {}
 
 
 def pct(pred: float, real: float) -> str:
@@ -32,7 +26,8 @@ def main() -> None:
         mid = MODEL_IDS.get(r["model"], r["model"])
         spec = specs.setdefault(mid, load_model(mid))
         fit = estimate(spec, int(r["gpu_mem_mib"]) / 1024, int(r["context"]),
-                       kv_dtype_bytes=1 if r["kv_dtype"] == "fp8" else 2)
+                       kv_dtype_bytes=1 if r["kv_dtype"] == "fp8" else 2,
+                       max_num_seqs=int(r.get("max_num_seqs") or 256))
         w, k, t = float(r["weights_gib"]), float(r["kv_pool_gib"]), int(r["kv_tokens"])
         out.append([mid, r["gpu"].replace("NVIDIA ", ""), r["kv_dtype"],
                     f"{w:.1f}", f"{fit.weights_gib:.1f}",

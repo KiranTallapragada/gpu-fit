@@ -1,0 +1,11 @@
+model	gpu	gpu_mem_mib	vllm	context	max_num_seqs	kv_dtype	weights_gib	kv_pool_gib	kv_tokens	status
+Qwen/Qwen3-8B	NVIDIA L40S	46068	0.31.0	32768	32	auto	15.27	24.13	175696	ok
+Qwen/Qwen3-8B	NVIDIA L40S	46068	0.31.0	32768	32	fp8	15.27			failed
+Qwen/Qwen3-14B	NVIDIA L40S	46068	0.31.0	32768	32	auto	27.52	11.58	75888	ok
+Qwen/Qwen3-14B	NVIDIA L40S	46068	0.31.0	32768	32	fp8	27.52			failed
+Qwen/Qwen3-32B-FP8	NVIDIA L40S	46068	0.31.0	32768	32	auto	32.52	6.48		failed
+Qwen/Qwen3-32B-FP8	NVIDIA L40S	46068	0.31.0	32768	32	fp8	32.52			failed
+Qwen/Qwen3.8-27B-FP8	NVIDIA L40S	46068	0.31.0	32768	32	auto	28.9	9.64	137216	ok
+Qwen/Qwen3.8-27B-FP8	NVIDIA L40S	46068	0.31.0	32768	32	fp8	28.9			failed
+Qwen/Qwen3.6-35B-A3B-FP8	NVIDIA L40S	46068	0.31.0	32768	32	auto	34.25	4.2	179361	ok
+Qwen/Qwen3.6-35B-A3B-FP8	NVIDIA L40S	46068	0.31.0	32768	32	fp8	34.25			failed

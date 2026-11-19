@@ -24,7 +24,7 @@ $ gpu-fit deepseek-ai/DeepSeek-V3 --gpu H200 --tp 8 --context 128k
 
   vLLM budget per GPU             126.4 GiB
     weights                        80.1 GiB
-    runtime overhead (assumed)      2.0 GiB
+    runtime overhead                2.0 GiB
     left for KV cache              44.2 GiB
   KV cache capacity              675,671 tokens
   Requests at full context       5.2
@@ -52,13 +52,14 @@ Most calculators multiply parameters by bytes and add a guess. Modern models bre
 | Sliding window (Gemma, Mistral) | Window layers stop growing past the window | ✓ |
 | FP8 / AWQ / GPTQ checkpoints | Exact weight size from the safetensors metadata | ✓ |
 | Tensor parallel beyond KV heads | KV heads get replicated, not split | ✓ |
+| Hybrid `--max-num-seqs` limit | vLLM refuses to start above the state-slot count | ✓ warns first |
 | FP8 KV cache | Doubles capacity: `--kv-cache-dtype fp8` | ✓ |
 
 ## Options
 
 ```
 gpu-fit MODEL [--gpu L40S | --gpu-mem-gib 48] [--tp 2] [--context 128k]
-              [--concurrency 8] [--kv-cache-dtype fp8] [--util 0.9]
+              [--concurrency 8] [--max-num-seqs 32] [--kv-cache-dtype fp8] [--util 0.9]
               [--overhead-gib 2.0] [--json]
 ```
 
@@ -78,20 +79,35 @@ KV/token  = 2 × full-attention layers × KV heads per GPU × head dim × dtype 
 requests  = KV pool / (context × KV/token + sliding-window KV + recurrent state)
 ```
 
-## Accuracy, honestly
+## Accuracy, measured
+
+Predicted vs what vLLM 0.31 actually allocated on an AWS g6e.xlarge (1× L40S 48 GB),
+32K context, `--max-num-seqs 32`. Raw data and method: [`bench/`](bench/).
+
+| Model | Type | KV tokens (vLLM) | KV tokens (gpu-fit) | Error |
+|---|---|---|---|---|
+| Qwen/Qwen3-8B | dense | 175,696 | 174,639 | −0.6% |
+| Qwen/Qwen3-14B | dense | 75,888 | 76,882 | +1.3% |
+| Qwen/Qwen3.8-27B-FP8 | hybrid + vision | 137,216 | 134,122 | −2.3% |
+| Qwen/Qwen3.6-35B-A3B-FP8 | hybrid MoE + vision | 179,361 | 159,023 | −11.3% (cautious) |
 
 - Weights and KV per token come straight from the config, so they're exact.
-- **Runtime overhead** (activations, CUDA graphs) is an assumption: 2 GiB per GPU by default.
-  It grows with batch size and model width. Override it with `--overhead-gib`.
-- **Hybrid models:** vLLM pads KV pages to hold the recurrent state, so real capacity can be lower than shown.
-- Treat the output as a planning estimate. Confirm on the real GPU before you commit money.
+- Runtime overhead (activations, CUDA graphs) is calibrated from these runs: about
+  1.25 GiB for text models and 2 GiB when vLLM also profiles a vision encoder, plus a
+  little more for each `--max-num-seqs` slot. Override it with `--overhead-gib`.
+- **Hybrid models have a hard limit on `--max-num-seqs`.** Each request needs one
+  recurrent-state slot. Ask for more slots than fit and vLLM refuses to start; gpu-fit
+  tells you the limit first (it predicted 156 where vLLM reported 164).
+- Treat the output as a planning estimate and confirm on the real GPU before you commit money.
 
 **Help make it exact:** share what vLLM printed on your hardware (see [CONTRIBUTING.md](CONTRIBUTING.md)).
 Every measurement improves the defaults for everyone.
 
 ## Roadmap
 
-- [ ] Measured overhead table from community results
+- [x] Measured accuracy on real hardware (L40S)
+- [ ] More GPUs (L4, H100) and models (Llama, Mistral, Gemma) from community results
+- [ ] FP8 KV cache measurements
 - [ ] Throughput estimate (tokens/s) from memory bandwidth
 - [ ] SGLang and TensorRT-LLM memory models
 - [ ] Web version

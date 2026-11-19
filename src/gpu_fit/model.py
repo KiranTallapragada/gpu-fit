@@ -24,7 +24,9 @@ class ModelSpec:
     sliding_window: Optional[int] = None
     linear_attn_layers: int = 0  # Mamba / linear-attention layers: fixed state, no per-token KV
     linear_state_elems: int = 0  # recurrent state per request per linear layer (elements)
+    linear_conv_elems: int = 0   # the convolution part of that state (kept in model dtype)
     state_dtype_bytes: int = 2
+    multimodal: bool = False     # has a vision/audio encoder that vLLM also profiles
     mla_dim: Optional[int] = None  # DeepSeek-style latent KV: per-layer per-token width
     max_context: Optional[int] = None
     notes: list = field(default_factory=list)
@@ -44,17 +46,32 @@ class ModelSpec:
 
     def linear_state_bytes(self, tp: int = 1) -> int:
         """Recurrent state one request holds across all linear-attention layers, one GPU."""
-        return self.linear_attn_layers * self.linear_state_elems * self.state_dtype_bytes // tp
+        return self.linear_attn_layers * self.linear_state_layer_bytes() // tp
+
+    def linear_state_layer_bytes(self) -> int:
+        """vLLM keeps the recurrent matrix in fp32 and the conv state in the model dtype."""
+        ssm = self.linear_state_elems - self.linear_conv_elems
+        return ssm * 4 + self.linear_conv_elems * self.state_dtype_bytes
+
+    def hybrid_block_tokens(self, kv_dtype_bytes: int, tp: int = 1) -> int:
+        """vLLM sizes a hybrid model's KV block so one attention page holds one layer's
+        recurrent state: block tokens = state bytes / attention bytes per token, rounded up to 16."""
+        full, _ = self.kv_bytes_per_token(kv_dtype_bytes, tp)
+        if not (self.hybrid and full and self.linear_state_elems):
+            return 0
+        per_layer_token = full // self.full_attn_layers
+        raw = -(-self.linear_state_layer_bytes() // tp // per_layer_token)
+        return -(-raw // 16) * 16
 
 
-def _linear_state_elems(c: dict) -> int:
-    """Gated-DeltaNet style (Qwen3-Next family): conv state + recurrent matrix per layer."""
+def _linear_state_elems(c: dict) -> tuple:
+    """Gated-DeltaNet style (Qwen3-Next family): (total, conv) state elements per layer."""
     kh, vh = c.get("linear_num_key_heads"), c.get("linear_num_value_heads")
     kd, vd = c.get("linear_key_head_dim"), c.get("linear_value_head_dim")
     if not all((kh, vh, kd, vd)):
-        return 0
-    conv_dim = 2 * kh * kd + vh * vd
-    return conv_dim * (c.get("linear_conv_kernel_dim", 4) - 1) + vh * kd * vd
+        return 0, 0
+    conv = (2 * kh * kd + vh * vd) * (c.get("linear_conv_kernel_dim", 4) - 1)
+    return conv + vh * kd * vd, conv
 
 
 def _fetch_json(url: str) -> dict:
@@ -101,17 +118,18 @@ def spec_from_config(name: str, config: dict, weight_bytes: int) -> ModelSpec:
     if c.get("kv_lora_rank"):
         mla = c["kv_lora_rank"] + c.get("qk_rope_head_dim", 64)
         notes.append("MLA latent KV: compact, but replicated on every tensor-parallel GPU")
-    state = _linear_state_elems(c) if linear else 0
+    state, conv = _linear_state_elems(c) if linear else (0, 0)
     if linear:
         notes.append(f"hybrid: {linear} linear-attention layers carry no per-token KV")
-        notes.append("hybrid: vLLM pads KV pages to fit recurrent state, so real capacity can be lower; test before you commit")
         if not state:
             notes.append("recurrent state size unknown for this architecture; not counted")
 
     return ModelSpec(
         name=name, weight_bytes=weight_bytes, full_attn_layers=full, kv_heads=kv_heads,
         head_dim=head_dim, sliding_layers=sliding, sliding_window=window,
-        linear_attn_layers=linear, linear_state_elems=state, mla_dim=mla,
+        linear_attn_layers=linear, linear_state_elems=state, linear_conv_elems=conv,
+        multimodal=any(k in config for k in ("vision_config", "audio_config", "vision_tower")),
+        mla_dim=mla,
         max_context=c.get("max_position_embeddings"), notes=notes,
     )
 
