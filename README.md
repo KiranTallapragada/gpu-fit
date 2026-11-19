@@ -1,5 +1,7 @@
 # gpu-fit
 
+**[Try it in your browser →](https://kiran-tallapragada.pages.dev/gpu-fit/)** · no install, nothing leaves your browser
+
 **Will this LLM fit on this GPU, at this context length, for this many users?**
 
 `gpu-fit` answers that before you rent the GPU. It reads the model's config and weight sizes
