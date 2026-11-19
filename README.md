@@ -37,7 +37,7 @@ $ gpu-fit deepseek-ai/DeepSeek-V3 --gpu H200 --tp 8 --context 128k
 ## Install
 
 ```
-pip install gpu-fit        # no dependencies, Python 3.9+
+pip install gpu-fit        # no dependencies, Python 3.10+
 ```
 
 ## Why another VRAM calculator?

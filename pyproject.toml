@@ -4,10 +4,10 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "gpu-fit"
-version = "0.1.0"
+version = "0.1.1"
 description = "Will this LLM fit on this GPU? vLLM memory maths: weights, KV cache, context and concurrency."
 readme = "README.md"
-requires-python = ">=3.9"
+requires-python = ">=3.10"
 license = "MIT"
 license-files = ["LICENSE"]
 authors = [{ name = "Kiran Tallapragada" }]
