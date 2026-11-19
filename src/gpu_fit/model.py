@@ -83,6 +83,27 @@ def _fetch_json(url: str) -> dict:
         return json.load(r)
 
 
+def hub_weight_bytes(base: str, model_id: str):
+    """Exact on-disk size of the weights, which is what lands in GPU memory.
+
+    Parameter counts by dtype mislead for packed formats (MXFP4, AWQ, GPTQ), and some
+    safetensors indexes carry a wrong total_size, so trust the weight files' own sizes first
+    (skipping duplicate `consolidated` copies), then the index."""
+    try:
+        files = _fetch_json(f"{base}/api/models/{model_id}/tree/main")
+        sizes = [f.get("size", 0) for f in files if f.get("path", "").endswith(".safetensors")
+                 and not f["path"].startswith("consolidated")]
+        if sum(sizes):
+            return sum(sizes)
+    except Exception:  # noqa: BLE001
+        pass
+    try:
+        idx = _fetch_json(f"{base}/{model_id}/resolve/main/model.safetensors.index.json")
+        return int((idx.get("metadata") or {}).get("total_size") or 0) or None
+    except Exception:  # noqa: BLE001
+        return None
+
+
 def weight_bytes_from_counts(counts: dict) -> int:
     return sum(n * DTYPE_BYTES.get(dt.upper(), 2) for dt, n in counts.items())
 
@@ -140,7 +161,8 @@ def load_model(model_id: str) -> ModelSpec:
             config = json.load(f)
         size = sum(
             os.path.getsize(os.path.join(model_id, p))
-            for p in os.listdir(model_id) if p.endswith(".safetensors")
+            for p in os.listdir(model_id)
+            if p.endswith(".safetensors") and not p.startswith("consolidated")
         )
         return spec_from_config(os.path.basename(model_id.rstrip("/")), config, size)
 
@@ -151,7 +173,10 @@ def load_model(model_id: str) -> ModelSpec:
     except Exception as e:  # noqa: BLE001
         raise SystemExit(f"Could not read {model_id} from Hugging Face ({e}). "
                          "Gated model? Set HF_TOKEN, or pass a local model folder.")
-    counts = (info.get("safetensors") or {}).get("parameters")
-    if not counts:
-        raise SystemExit(f"{model_id}: no safetensors metadata on the Hub; pass a local folder.")
-    return spec_from_config(model_id, config, weight_bytes_from_counts(counts))
+    size = hub_weight_bytes(base, model_id)
+    if not size:
+        counts = (info.get("safetensors") or {}).get("parameters")
+        if not counts:
+            raise SystemExit(f"{model_id}: no safetensors metadata on the Hub; pass a local folder.")
+        size = weight_bytes_from_counts(counts)
+    return spec_from_config(model_id, config, size)
