@@ -1,0 +1,136 @@
+"""gpu-fit: will this model fit on this GPU, at this context, for this many users (vLLM)?"""
+
+import argparse
+import json
+import sys
+from dataclasses import asdict
+
+from . import __version__
+from .calc import estimate
+from .gpus import GPUS, get_gpu
+from .model import load_model
+
+TP_SIZES = (1, 2, 4, 8)
+
+
+def parse_tokens(text: str) -> int:
+    t = text.strip().lower()
+    mult = 1
+    if t.endswith("k"):
+        mult, t = 1024, t[:-1]
+    elif t.endswith("m"):
+        mult, t = 1024 * 1024, t[:-1]
+    return int(float(t) * mult)
+
+
+def _fmt_tokens(n: int) -> str:
+    return f"{n:,}"
+
+
+def _command(model: str, fit, args) -> str:
+    parts = [f"vllm serve {model}", f"--max-model-len {fit.context}"]
+    if fit.tp > 1:
+        parts.append(f"--tensor-parallel-size {fit.tp}")
+    if args.kv_cache_dtype == "fp8":
+        parts.append("--kv-cache-dtype fp8")
+    parts.append(f"--max-num-seqs {max(1, int(fit.concurrent)) if args.concurrency is None else args.concurrency}")
+    if args.util != 0.9:
+        parts.append(f"--gpu-memory-utilization {args.util}")
+    return " \\\n  ".join(parts)
+
+
+def report_one(spec, gpu_name, gpu_mem, args) -> int:
+    kv_bytes = 1 if args.kv_cache_dtype == "fp8" else 2
+    fit = estimate(spec, gpu_mem, args.context, args.tp, kv_bytes, args.util, args.overhead_gib)
+    need = args.concurrency or 1
+    ok = fit.kv_pool_gib > 0 and fit.concurrent >= need
+
+    if args.json:
+        print(json.dumps({"model": spec.name, "gpu": gpu_name, "fits": ok, **asdict(fit)}, indent=2))
+        return 0 if ok else 1
+
+    print(f"\n{spec.name}  on  {args.tp}× {gpu_name} ({gpu_mem:.1f} GiB each)")
+    print(f"context {_fmt_tokens(args.context)} · KV cache {args.kv_cache_dtype}"
+          f" · gpu_memory_utilization {args.util}\n")
+    rows = [
+        ("vLLM budget per GPU", f"{fit.budget_gib:6.1f} GiB"),
+        ("  weights", f"{fit.weights_gib:6.1f} GiB"),
+        ("  runtime overhead (assumed)", f"{fit.overhead_gib:6.1f} GiB"),
+        ("  left for KV cache", f"{fit.kv_pool_gib:6.1f} GiB"),
+        ("KV cache capacity", f"{_fmt_tokens(fit.kv_tokens)} tokens"),
+        ("Requests at full context", f"{fit.concurrent:.1f}"),
+        ("Longest single request", f"{_fmt_tokens(fit.max_context_one_request)} tokens"),
+    ]
+    for label, value in rows:
+        print(f"  {label:<30} {value}")
+    for note in spec.notes:
+        print(f"  note: {note}")
+
+    if fit.kv_pool_gib <= 0:
+        print("\n✗ Does not fit: the weights alone exceed the budget. Try --tp, a bigger GPU or a quantised model.")
+    elif not ok:
+        print(f"\n✗ Fits, but only {fit.concurrent:.1f} requests at {_fmt_tokens(args.context)} tokens"
+              f" (you asked for {need}). Try --kv-cache-dtype fp8, a shorter context or more GPUs.")
+    else:
+        print(f"\n✓ Fits. Suggested command:\n\n  {_command(spec.name, fit, args)}")
+    print()
+    return 0 if ok else 1
+
+
+def report_scan(spec, args) -> int:
+    kv_bytes = 1 if args.kv_cache_dtype == "fp8" else 2
+    need = args.concurrency or 1
+    results = []
+    for gpu in GPUS.values():
+        for tp in TP_SIZES:
+            fit = estimate(spec, gpu.memory_gib, args.context, tp, kv_bytes, args.util, args.overhead_gib)
+            if fit.kv_pool_gib > 0 and fit.concurrent >= need:
+                results.append((gpu, fit))
+                break
+        else:
+            results.append((gpu, None))
+
+    if args.json:
+        print(json.dumps([{"gpu": g.name, "fits": f is not None, **(asdict(f) if f else {})}
+                          for g, f in results], indent=2))
+        return 0
+
+    print(f"\n{spec.name} · context {_fmt_tokens(args.context)} · {need} request(s) at once"
+          f" · KV {args.kv_cache_dtype}\n")
+    print(f"  {'GPU':<13}{'smallest setup':<16}{'requests at full ctx':>22}{'KV tokens':>14}")
+    for gpu, fit in results:
+        if fit is None:
+            print(f"  {gpu.name:<13}does not fit on 8 or fewer")
+        else:
+            print(f"  {gpu.name:<13}{f'{fit.tp}× {gpu.name}':<16}{fit.concurrent:>22.1f}{_fmt_tokens(fit.kv_tokens):>14}")
+    print("\nDetail for one option: gpu-fit MODEL --gpu <name> --tp <n> ...\n")
+    return 0
+
+
+def main(argv=None) -> int:
+    p = argparse.ArgumentParser(prog="gpu-fit", description=__doc__)
+    p.add_argument("model", help="Hugging Face id (org/name) or a local model folder")
+    p.add_argument("--gpu", help="GPU name, e.g. L40S, H100, A100-80. Omit to compare all.")
+    p.add_argument("--gpu-mem-gib", type=float, help="Custom GPU memory instead of --gpu")
+    p.add_argument("--tp", type=int, default=1, help="tensor-parallel GPUs (default 1)")
+    p.add_argument("--context", type=parse_tokens, default=parse_tokens("32k"),
+                   help="tokens per request, e.g. 32k, 128k (default 32k)")
+    p.add_argument("--concurrency", type=int, help="requests at full context you need at once")
+    p.add_argument("--kv-cache-dtype", choices=["auto", "fp8"], default="auto")
+    p.add_argument("--util", type=float, default=0.9, help="gpu_memory_utilization (default 0.9)")
+    p.add_argument("--overhead-gib", type=float, help="runtime overhead per GPU (default 2.0)")
+    p.add_argument("--json", action="store_true", help="machine-readable output")
+    p.add_argument("--version", action="version", version=f"gpu-fit {__version__}")
+    args = p.parse_args(argv)
+
+    spec = load_model(args.model)
+    if args.gpu_mem_gib:
+        return report_one(spec, "custom", args.gpu_mem_gib, args)
+    if args.gpu:
+        gpu = get_gpu(args.gpu)
+        return report_one(spec, gpu.name, gpu.memory_gib, args)
+    return report_scan(spec, args)
+
+
+if __name__ == "__main__":
+    sys.exit(main())
