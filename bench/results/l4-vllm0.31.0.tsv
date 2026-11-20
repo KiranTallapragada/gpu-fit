@@ -1,0 +1,8 @@
+model	gpu	gpu_mem_mib	vllm	context	max_num_seqs	kv_dtype	weights_gib	kv_pool_gib	kv_tokens	status
+Qwen/Qwen3-4B	NVIDIA L4	23034	0.31.0	32768	32	auto	7.56	11.76	85632	ok
+Qwen/Qwen3-8B	NVIDIA L4	23034	0.31.0	32768	32	auto	15.27	3.6		does_not_start
+Qwen/Qwen3-8B-FP8	NVIDIA L4	23034	0.31.0	32768	32	auto	8.9	9.95	72432	ok
+Qwen/Qwen3-4B	NVIDIA L4	23034	0.31.0	32768	32	fp8	7.56	12.25	178448	ok
+Qwen/Qwen3-8B-FP8	NVIDIA L4	23034	0.31.0	32768	32	fp8	8.9	10.86	158080	ok
+Qwen/Qwen3-8B	NVIDIA L4	23034	0.31.0	16384	32	auto	15.27	3.6	26192	ok
+Qwen/Qwen3-8B	NVIDIA L4	23034	0.31.0	16384	32	fp8	15.27	3.51	51072	ok

@@ -40,7 +40,7 @@ for model in "$@"; do
     w=$(grep -oE "Model loading took [0-9.]+ GiB" "$log" | grep -oE "[0-9.]+" | head -1)
     k=$(grep -oE "Available KV cache memory: [0-9.]+ GiB" "$log" | grep -oE "[0-9.]+" | head -1)
     t=$(grep -oE "GPU KV cache size: [0-9,]+" "$log" | grep -oE "[0-9,]+$" | tr -d , | head -1)
-    name=$(basename "$model")
+    name="$model"  # full id (org/name), as compare.py expects
     printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' "$name" "$gpu" "$mem" "$ver" "$CONTEXT" "$MAX_NUM_SEQS" "$kv" \
       "${w:-}" "${k:-}" "${t:-}" "$status" >> "$out"
     echo "$(date +%T) $name kv=$kv -> $status weights=${w:-?} kv_pool=${k:-?} tokens=${t:-?}"

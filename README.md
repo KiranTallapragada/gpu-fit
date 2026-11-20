@@ -38,7 +38,12 @@ $ gpu-fit deepseek-ai/DeepSeek-V3 --gpu H200 --tp 8 --context 128k
   Longest single request         163,840 tokens
 
 ✓ Fits. Suggested command:
-  vllm serve deepseek-ai/DeepSeek-V3 --max-model-len 131072 --tensor-parallel-size 8 --max-num-seqs 256 --gpu-memory-utilization 0.92
+
+  vllm serve deepseek-ai/DeepSeek-V3 \
+  --max-model-len 131072 \
+  --tensor-parallel-size 8 \
+  --max-num-seqs 256 \
+  --gpu-memory-utilization 0.92
 ```
 
 ## Install
@@ -125,23 +130,44 @@ hardware are welcome (see CONTRIBUTING.md).
 
 ## Accuracy, measured
 
-Predicted vs what vLLM 0.31 actually allocated on an AWS g6e.xlarge (1× L40S 48 GB),
-32K context, `--max-num-seqs 32`. Raw data and method: [`bench/`](bench/).
+Predicted vs what vLLM 0.31 actually allocated on three AWS GPUs across two generations: **L40S 48 GB**
+(g6e, Ada), **A10G 24 GB** (g5, Ampere) and **L4 24 GB** (g6, Ada). 32K context unless noted,
+`--max-num-seqs 32`. Raw data and method: [`bench/`](bench/).
 
-| Model | Type | KV tokens (vLLM) | KV tokens (gpu-fit) | Error |
-|---|---|---|---|---|
-| Qwen/Qwen3-8B | dense | 175,696 | 174,637 | −0.6% |
-| Qwen/Qwen3-14B | dense | 75,888 | 76,880 | +1.3% |
-| Qwen/Qwen3.8-27B-FP8 | hybrid + vision | 137,216 | 134,077 | −2.3% |
-| Qwen/Qwen3.6-35B-A3B-FP8 | hybrid MoE + vision | 179,361 | 158,477 | −11.6% (cautious) |
+| Model | Type | GPU | KV cache | KV tokens (vLLM) | KV tokens (gpu-fit) | Error |
+|---|---|---|---|---|---|---|
+| Qwen/Qwen3-8B | dense | L40S (Ada) | default | 175,696 | 175,874 | +0.1% |
+| Qwen/Qwen3-14B | dense | L40S (Ada) | default | 75,888 | 75,569 | −0.4% |
+| Qwen/Qwen3.8-27B-FP8 | hybrid + vision | L40S (Ada) | default | 137,216 | 134,077 | −2.3% |
+| Qwen/Qwen3.6-35B-A3B-FP8 | hybrid MoE + vision | L40S (Ada) | default | 179,361 | 158,477 | −11.6% (cautious) |
+| Qwen/Qwen3-4B | dense | A10G (Ampere) | default | 85,712 | 85,719 | +0.0% |
+| Qwen/Qwen3-8B-FP8 | dense, FP8 weights | A10G (Ampere) | default | 72,496 | 72,240 | −0.4% |
+| Qwen/Qwen3-4B | dense | A10G (Ampere) | FP8 | 178,736 | 171,438 | −4.1% |
+| Qwen/Qwen3-8B-FP8 | dense, FP8 weights | A10G (Ampere) | FP8 | 158,240 | 144,480 | −8.7% (cautious) |
+| Qwen/Qwen3-8B | dense | A10G (Ampere), 16K | default | 26,256 | 25,142 | −4.2% |
+| Qwen/Qwen3-8B | dense | A10G (Ampere), 16K | FP8 | 51,200 | 50,284 | −1.8% |
+| Qwen/Qwen3-4B | dense | L4 (Ada) | default | 85,632 | 85,758 | +0.1% |
+| Qwen/Qwen3-8B-FP8 | dense, FP8 weights | L4 (Ada) | default | 72,432 | 72,279 | −0.2% |
+| Qwen/Qwen3-4B | dense | L4 (Ada) | FP8 | 178,448 | 171,516 | −3.9% |
+| Qwen/Qwen3-8B-FP8 | dense, FP8 weights | L4 (Ada) | FP8 | 158,080 | 144,558 | −8.6% (cautious) |
+| Qwen/Qwen3-8B | dense | L4 (Ada), 16K | default | 26,192 | 25,181 | −3.9% |
+| Qwen/Qwen3-8B | dense | L4 (Ada), 16K | FP8 | 51,072 | 50,362 | −1.4% |
+
+- **Dense models, default KV cache, 32K:** within 0.5% of what vLLM reported on all three GPUs
+  (at most 0.15% above). At 16K and with an FP8 KV cache the estimates are more cautious (up to 9% below).
+- **Same behaviour on Ampere and Ada:** A10G and L4 results agree within 0.4%, and vLLM's runtime
+  overhead is the same on both. FP8 weights and the FP8 KV cache both work on the Ampere A10G.
+- Qwen3-8B (16-bit) at 32K context does not start on a 24 GB GPU: gpu-fit predicts this and says so.
 
 - Weights come from the checkpoint's file sizes and KV per token from the model config; vLLM's
   runtime allocation can differ slightly from the file sizes.
-- Runtime overhead (activations, CUDA graphs, non-torch memory) is calibrated from these
-  runs at vLLM's default `gpu_memory_utilization` of **0.92**: about 2.15 GiB for text models
-  and 2.9 GiB when vLLM also profiles a vision encoder, plus a little more for each
-  `--max-num-seqs` slot. Override it with `--overhead-gib`. (Before 0.4.0 gpu-fit assumed a
-  0.9 default and a smaller overhead; predictions at the default are unchanged.)
+- Runtime overhead (activations, CUDA graphs, non-torch memory) is calibrated from these runs at
+  vLLM's default `gpu_memory_utilization` of 0.92. For dense text models it grows with the model's
+  width: about 0.5 + 0.37 GiB per 1,024 of hidden size. That was measured on Qwen3 models with hidden
+  sizes from 2,560 to 5,120; outside that range, and for sliding-window models, it's an extrapolation.
+  Mixture-of-experts, hybrid and vision models use fixed values measured on the L40S. A bit more is
+  added per `--max-num-seqs` slot. Override it with `--overhead-gib`. With an FP8 KV cache, vLLM's
+  overhead is sometimes lower, so those estimates are cautious.
 - **vLLM 0.34 changed this.** On CUDA it now sizes the KV cache from memory actually free
   after warm-up ("extensible KV cache") and uses the whole GPU unless you set
   `--gpu-memory-utilization` (gpu-fit's suggested commands always set it). gpu-fit hasn't been
@@ -172,7 +198,8 @@ measurements improve the calibration; the accuracy section above always says wha
 - [ ] Re-measure on vLLM 0.34 (extensible KV cache)
 - [ ] Workload mode: safe concurrency, throughput and cost per 1,000 requests
 - [ ] Speed calibrated against measured vLLM throughput
-- [ ] More GPUs measured (L4, H100) and models (Llama, Gemma, Mistral) from community results
+- [x] Measured on three GPUs across Ampere and Ada (A10G, L4, L40S)
+- [ ] More GPUs measured (A100, H100, B200) and models (Llama, Gemma, Mistral)
 - [ ] Prompt-processing (prefill) time and time-to-first-token
 - [ ] Cost per million tokens for cloud GPUs
 - [ ] SGLang and TensorRT-LLM memory models

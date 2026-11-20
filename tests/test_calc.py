@@ -235,3 +235,55 @@ class TestJsonContract(unittest.TestCase):
                     "weights_gib", "overhead_gib", "kv_pool_gib", "kv_tokens", "concurrent",
                     "max_num_seqs", "speed"):
             self.assertIn(key, d)
+
+
+class TestOverheadModel(unittest.TestCase):
+    def test_dense_overhead_scales_with_hidden_size(self):
+        from gpu_fit.calc import default_overhead
+        small = spec_from_config("small", {**DENSE, "hidden_size": 2560}, 0)
+        large = spec_from_config("large", {**DENSE, "hidden_size": 5120}, 0)
+        self.assertAlmostEqual(default_overhead(small, 32), 0.50 + 0.37 * 2.5)
+        self.assertAlmostEqual(default_overhead(large, 32), 0.50 + 0.37 * 5.0)
+
+    def test_other_model_types_keep_measured_constants(self):
+        from gpu_fit.calc import OVERHEAD_MULTIMODAL_GIB, OVERHEAD_TEXT_GIB, default_overhead
+        self.assertEqual(default_overhead(spec_from_config("mla", MLA, 0), 32), OVERHEAD_TEXT_GIB)
+        self.assertEqual(default_overhead(spec_from_config("hybrid", HYBRID, 0), 32), OVERHEAD_TEXT_GIB)
+        mm = spec_from_config("mm", {**DENSE, "vision_config": {}}, 0)
+        self.assertEqual(default_overhead(mm, 32), OVERHEAD_MULTIMODAL_GIB)
+
+
+class TestMoEDetection(unittest.TestCase):
+    def test_ernie_style_moe_keeps_the_moe_overhead(self):
+        from gpu_fit.calc import OVERHEAD_TEXT_GIB, default_overhead
+        ernie = {**DENSE, "hidden_size": 2560, "moe_num_experts": 64, "moe_k": 6,
+                 "moe_intermediate_size": 1536, "intermediate_size": 12288}
+        s = spec_from_config("ernie", ernie, 0)
+        self.assertEqual((s.moe_experts, s.moe_topk), (64, 6))
+        self.assertEqual(default_overhead(s, 32), OVERHEAD_TEXT_GIB)
+
+    def test_moe_without_routing_info_is_still_moe(self):
+        s = spec_from_config("moe", {**DENSE, "num_experts": 8}, 0)
+        self.assertEqual((s.moe_experts, s.moe_topk, s.expert_share), (8, 0, 0.0))
+
+
+# Frozen Qwen3-4B text config (from its config.json) so the accuracy check runs offline.
+QWEN3_4B = {"hidden_size": 2560, "num_hidden_layers": 36, "num_attention_heads": 32,
+            "num_key_value_heads": 8, "head_dim": 128, "max_position_embeddings": 40960}
+
+
+class TestMeasuredAccuracy(unittest.TestCase):
+    """Replays the A10G and L4 benchmark rows for Qwen3-4B (bench/results)."""
+
+    def test_qwen3_4b_kv_tokens_within_one_percent(self):
+        import csv, glob, os
+        root = os.path.join(os.path.dirname(__file__), "..", "bench", "results")
+        rows = [r for f in glob.glob(os.path.join(root, "*-vllm0.31.0.tsv"))
+                for r in csv.DictReader(open(f), delimiter="\t")
+                if r["model"] == "Qwen/Qwen3-4B" and r["kv_dtype"] == "auto" and r["status"] == "ok"]
+        self.assertGreaterEqual(len(rows), 2)
+        for r in rows:
+            spec = spec_from_config("Qwen/Qwen3-4B", QWEN3_4B, int(float(r["weights_gib"]) * GIB))
+            fit = estimate(spec, int(r["gpu_mem_mib"]) / 1024, int(r["context"]), max_num_seqs=32)
+            err = (fit.kv_tokens - int(r["kv_tokens"])) / int(r["kv_tokens"])
+            self.assertLess(abs(err), 0.01, f"{r['gpu']}: {err:+.2%}")

@@ -1,0 +1,8 @@
+model	gpu	gpu_mem_mib	vllm	context	max_num_seqs	kv_dtype	weights_gib	kv_pool_gib	kv_tokens	status
+Qwen/Qwen3-4B	NVIDIA A10G	23028	0.31.0	32768	32	auto	7.56	11.77	85712	ok
+Qwen/Qwen3-8B	NVIDIA A10G	23028	0.31.0	32768	32	auto	15.27	3.61		does_not_start
+Qwen/Qwen3-8B-FP8	NVIDIA A10G	23028	0.31.0	32768	32	auto	8.9	9.96	72496	ok
+Qwen/Qwen3-4B	NVIDIA A10G	23028	0.31.0	32768	32	fp8	7.56	12.27	178736	ok
+Qwen/Qwen3-8B-FP8	NVIDIA A10G	23028	0.31.0	32768	32	fp8	8.9	10.87	158240	ok
+Qwen/Qwen3-8B	NVIDIA A10G	23028	0.31.0	16384	32	auto	15.27	3.61	26256	ok
+Qwen/Qwen3-8B	NVIDIA A10G	23028	0.31.0	16384	32	fp8	15.27	3.52	51200	ok

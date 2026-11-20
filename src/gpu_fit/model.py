@@ -32,6 +32,7 @@ class ModelSpec:
     expert_share: float = 0.0    # share of weight bytes that are routed experts
     mla_dim: Optional[int] = None  # DeepSeek-style latent KV: per-layer per-token width
     max_context: Optional[int] = None
+    hidden_size: int = 0         # model width; runtime overhead grows with it
     notes: list = field(default_factory=list)
 
     @property
@@ -79,10 +80,15 @@ def _linear_state_elems(c: dict) -> tuple:
 
 def _moe(c: dict) -> tuple:
     """(experts, top-k, share of parameters in routed experts), estimated from the config."""
-    experts = c.get("num_experts") or c.get("n_routed_experts") or c.get("num_local_experts") or 0
-    topk = c.get("num_experts_per_tok") or 0
-    if not (experts and topk):
+    experts = (c.get("num_experts") or c.get("n_routed_experts") or c.get("num_local_experts")
+               or c.get("moe_num_experts") or 0)  # moe_num_experts: e.g. ERNIE-4.5
+    if isinstance(experts, (list, tuple)):  # some configs list experts per modality
+        experts = max(experts) if experts else 0
+    topk = c.get("num_experts_per_tok") or c.get("moe_k") or c.get("moe_top_k") or 0
+    if not experts or experts <= 1:
         return 0, 0, 0.0
+    if not topk:  # recognised as MoE, but routing unknown: treat every weight as read (cautious)
+        return experts, 0, 0.0
     hidden, layers = c["hidden_size"], c["num_hidden_layers"]
     inter = c.get("moe_intermediate_size") or c.get("intermediate_size")
     dense = (c.get("first_k_dense_replace") or 0) + len(c.get("mlp_only_layers") or [])
@@ -178,7 +184,8 @@ def spec_from_config(name: str, config: dict, weight_bytes: int) -> ModelSpec:
         linear_attn_layers=linear, linear_state_elems=state, linear_conv_elems=conv,
         multimodal=any(k in config for k in ("vision_config", "audio_config", "vision_tower")),
         mla_dim=mla,
-        max_context=c.get("max_position_embeddings"), notes=notes,
+        max_context=c.get("max_position_embeddings"), hidden_size=c.get("hidden_size") or 0,
+        notes=notes,
     )
 
 

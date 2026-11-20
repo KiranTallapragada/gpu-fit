@@ -19,11 +19,14 @@ GIB = 1024**3
 # from measured memory instead and uses 1.0 unless you set it).
 VLLM_DEFAULT_UTIL = 0.92
 
-# Activations + CUDA graphs + non-torch memory per GPU, measured at --max-num-seqs 32
-# (bench/results/l40s-vllm0.31.0.tsv, at the default 0.92): ~2.0-2.3 GiB for text models, ~2.9 GiB when vLLM
-# also profiles a vision encoder. Override with --overhead-gib.
-OVERHEAD_TEXT_GIB = 2.15
-OVERHEAD_MULTIMODAL_GIB = 2.9
+# Activations + CUDA graphs + non-torch memory per GPU, at --max-num-seqs 32 and vLLM's 0.92 default.
+# Dense text models: grows with model width and is the same on Ampere (A10G) and Ada (L4, L40S):
+# measured 1.36 GiB (hidden 2560), 1.81-1.99 (4096), 2.29 (5120) -> about 0.44 + 0.37 GiB per 1,024 of
+# hidden size, plus 0.06 GiB so estimates stay at or below measured (bench/results/*.tsv). Other model types keep the L40S-measured constants until measured.
+OVERHEAD_DENSE_BASE_GIB = 0.50  # 0.44 fits; +0.06 keeps estimates at or below measured
+OVERHEAD_DENSE_PER_1K_HIDDEN_GIB = 0.37
+OVERHEAD_TEXT_GIB = 2.15         # MoE, hybrid and latent-KV text models
+OVERHEAD_MULTIMODAL_GIB = 2.9    # vLLM also profiles the vision encoder
 # CUDA-graph capture grows with --max-num-seqs: 256 slots cost ~0.85 GiB more than 32.
 OVERHEAD_PER_SEQ_GIB = 0.0038
 BASE_SEQS = 32
@@ -34,7 +37,12 @@ VLLM_DEFAULT_MAX_NUM_SEQS = 256
 
 
 def default_overhead(spec: ModelSpec, max_num_seqs: int) -> float:
-    base = OVERHEAD_MULTIMODAL_GIB if spec.multimodal else OVERHEAD_TEXT_GIB
+    if spec.multimodal:
+        base = OVERHEAD_MULTIMODAL_GIB
+    elif spec.hidden_size and not (spec.moe_experts or spec.hybrid or spec.mla_dim):
+        base = OVERHEAD_DENSE_BASE_GIB + OVERHEAD_DENSE_PER_1K_HIDDEN_GIB * spec.hidden_size / 1024
+    else:
+        base = OVERHEAD_TEXT_GIB
     return base + OVERHEAD_PER_SEQ_GIB * (max_num_seqs - BASE_SEQS)
 
 
