@@ -124,6 +124,11 @@ def report_one(spec, gpu_name, gpu_mem, args, bandwidth_gbs=0) -> int:
               f" Use --max-num-seqs {fit.hybrid_slots} or lower.")
     elif fit.kv_pool_gib <= 0:
         print("\n✗ Does not fit: the weights alone exceed the budget. Try --tp, a bigger GPU or a quantised model.")
+    elif fit.concurrent < 1:
+        tips = ("more GPUs" if args.kv_cache_dtype == "fp8" else "--kv-cache-dtype fp8 or more GPUs")
+        print(f"\n✗ vLLM won't start with --max-model-len {fit.context}: one request at that length needs"
+              f" more KV cache than fits (about {_fmt_tokens(fit.max_context_one_request)} tokens)."
+              f" Use --max-model-len {fit.max_context_one_request} or less, {tips}.")
     elif not ok:
         tips = ("a shorter context or more GPUs" if args.kv_cache_dtype == "fp8"
                 else "--kv-cache-dtype fp8, a shorter context or more GPUs")

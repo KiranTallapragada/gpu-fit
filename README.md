@@ -2,7 +2,7 @@
 
 [![PyPI](https://img.shields.io/pypi/v/gpu-fit)](https://pypi.org/project/gpu-fit/) [![Tests](https://github.com/KiranTallapragada/gpu-fit/actions/workflows/test.yml/badge.svg)](https://github.com/KiranTallapragada/gpu-fit/actions/workflows/test.yml) [![Python](https://img.shields.io/pypi/pyversions/gpu-fit)](https://pypi.org/project/gpu-fit/) [![License: MIT](https://img.shields.io/badge/license-MIT-blue)](LICENSE)
 
-**[Try it in your browser →](https://kiran-tallapragada.pages.dev/gpu-fit/)** · no install, nothing leaves your browser
+**[Try it in your browser →](https://kiran-tallapragada.pages.dev/gpu-fit/)** · no install, the calculation runs in your browser
 
 **Will this LLM fit on this GPU, at this context length, for this many users, and how fast?**
 
@@ -82,7 +82,7 @@ the card: an OCR model, an embedding server, a second vLLM, or the old pod durin
 deploy. With estimate-based sizing (vLLM 0.33 and earlier) it refuses to start if free memory
 is below `total × gpu_memory_utilization`. vLLM 0.34's extensible KV cache skips that startup
 check, but the budget still caps vLLM's memory. Either way, if the other process grows later,
-something runs out of memory.
+an out-of-memory error can follow.
 
 Tell gpu-fit how much the other processes need per GPU and it estimates the highest
 `--gpu-memory-utilization` that leaves room for them, and what still fits in what's left:
@@ -117,7 +117,7 @@ requests  = KV pool / (context × KV/token + sliding-window KV + recurrent state
 ## Speed estimates
 
 gpu-fit also estimates decode speed (tokens per second): for one user, and per user at your
-concurrency. Generating a token is memory-bound, so the estimate divides the GPU's memory
+concurrency. Decoding is usually limited by memory bandwidth, so the estimate divides the GPU's memory
 bandwidth by what each step reads: the weights (for mixture-of-experts models, only the experts
 in use) plus every active request's KV cache, with a fixed per-layer cost that matters for small
 MoE models. Prompt processing is not included. It's a planning estimate: real numbers from your
@@ -135,7 +135,8 @@ Predicted vs what vLLM 0.31 actually allocated on an AWS g6e.xlarge (1× L40S 48
 | Qwen/Qwen3.8-27B-FP8 | hybrid + vision | 137,216 | 134,077 | −2.3% |
 | Qwen/Qwen3.6-35B-A3B-FP8 | hybrid MoE + vision | 179,361 | 158,477 | −11.6% (cautious) |
 
-- Weights and KV per token come straight from the config, so they're exact.
+- Weights come from the checkpoint's file sizes and KV per token from the model config; vLLM's
+  runtime allocation can differ slightly from the file sizes.
 - Runtime overhead (activations, CUDA graphs, non-torch memory) is calibrated from these
   runs at vLLM's default `gpu_memory_utilization` of **0.92**: about 2.15 GiB for text models
   and 2.9 GiB when vLLM also profiles a vision encoder, plus a little more for each
@@ -143,8 +144,8 @@ Predicted vs what vLLM 0.31 actually allocated on an AWS g6e.xlarge (1× L40S 48
   0.9 default and a smaller overhead; predictions at the default are unchanged.)
 - **vLLM 0.34 changed this.** On CUDA it now sizes the KV cache from memory actually free
   after warm-up ("extensible KV cache") and uses the whole GPU unless you set
-  `--gpu-memory-utilization`. Not measured yet: expect more KV capacity than gpu-fit predicts;
-  the estimate stays on the safe side. Measurements on 0.34 are next.
+  `--gpu-memory-utilization` (gpu-fit's suggested commands always set it). gpu-fit hasn't been
+  measured on 0.34 yet, so check the numbers there; measurements on 0.34 are next.
 - **Hybrid models have a hard limit on `--max-num-seqs`.** Each request needs one
   recurrent-state slot. Ask for more slots than fit and vLLM refuses to start; gpu-fit
   tells you the limit first (it predicted 156 where vLLM reported 164).

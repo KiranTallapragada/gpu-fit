@@ -210,3 +210,9 @@ class TestCliValidationAndCommand(unittest.TestCase):
         self.assertTrue(all("gpu_memory_utilization" in r and r["reserve_gib"] == 10 for r in rows))
         l4 = [r for r in rows if r["gpu"] == "L4"][0]
         self.assertLess(l4["gpu_memory_utilization"], 0.92)
+
+    def test_less_than_one_request_says_vllm_will_not_start(self):
+        # 16 GiB of weights on a 22 GiB card at 128K context: under one request fits.
+        code, out, _ = self._run("Org/Dense", "--gpu-mem-gib", "22", "--context", "128k")
+        self.assertEqual(code, 1)
+        self.assertIn("won't start with --max-model-len 131072", out)
