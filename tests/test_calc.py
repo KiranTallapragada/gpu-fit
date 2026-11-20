@@ -54,7 +54,7 @@ class TestEstimate(unittest.TestCase):
     def test_budget_arithmetic(self):
         s = spec_from_config("dense", DENSE, 16 * GIB)
         f = estimate(s, gpu_mem_gib=80, context=8192, overhead_gib=2.0)
-        self.assertAlmostEqual(f.kv_pool_gib, 80 * 0.9 - 16 - 2.0)
+        self.assertAlmostEqual(f.kv_pool_gib, 80 * 0.92 - 16 - 2.0)  # vLLM default 0.92
         self.assertEqual(f.kv_tokens, int(f.kv_pool_gib * GIB / 131072))
         self.assertAlmostEqual(f.concurrent, f.kv_tokens / 8192, places=2)
 
@@ -141,3 +141,35 @@ class TestEstimate(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestReserve(unittest.TestCase):
+    def _args(self, reserve=0.0, util=None):
+        import argparse
+        return argparse.Namespace(reserve_gib=reserve, util=util)
+
+    def test_default_is_vllm_default(self):
+        from gpu_fit.cli import resolve_util
+        self.assertEqual(resolve_util(44.99, self._args()), 0.92)
+
+    def test_reserve_sets_highest_accepted_util(self):
+        from gpu_fit.cli import resolve_util
+        # 44.99 GiB GPU, 12 GiB held by others, 0.5 GiB startup margin -> floor(32.49/44.99) = 0.72
+        self.assertEqual(resolve_util(44.99, self._args(12)), 0.72)
+
+    def test_reserve_never_raises_an_explicit_util(self):
+        from gpu_fit.cli import resolve_util
+        self.assertEqual(resolve_util(44.99, self._args(12, 0.5)), 0.5)
+        self.assertEqual(resolve_util(44.99, self._args(12, 0.9)), 0.72)
+
+    def test_reserve_bigger_than_gpu_leaves_nothing(self):
+        from gpu_fit.cli import resolve_util
+        self.assertEqual(resolve_util(44.99, self._args(50)), 0.0)
+
+    def test_budget_never_exceeds_free_memory(self):
+        from gpu_fit.cli import STARTUP_MARGIN_GIB, resolve_util
+        for mem in (22.0, 44.99, 79.1, 139.8):
+            for reserve in (0.5, 3, 10, 20):
+                u = resolve_util(mem, self._args(reserve))
+                if u > 0:
+                    self.assertLessEqual(u * mem, mem - reserve - STARTUP_MARGIN_GIB + 1e-9)

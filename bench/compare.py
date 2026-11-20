@@ -33,7 +33,7 @@ def main() -> None:
                     f"{w:.1f}", f"{fit.weights_gib:.1f}",
                     f"{k:.2f}", f"{fit.kv_pool_gib:.2f}",
                     f"{t:,}", f"{fit.kv_tokens:,}", pct(fit.kv_tokens, t),
-                    f"{0.9 * int(r['gpu_mem_mib']) / 1024 - w - k:.2f}"])
+                    f"{0.92 * int(r['gpu_mem_mib']) / 1024 - w - k:.2f}"])
     head = ["model", "gpu", "kv", "weights GiB (vLLM)", "weights GiB (gpu-fit)",
             "KV pool GiB (vLLM)", "KV pool GiB (gpu-fit)", "KV tokens (vLLM)",
             "KV tokens (gpu-fit)", "error", "implied overhead GiB"]

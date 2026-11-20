@@ -28,7 +28,7 @@ def main() -> int:
                 for tp in TPS:
                     for kvb in KVS:
                         for seqs in SEQS:
-                            f = estimate(spec, mem, ctx, tp, kvb, 0.9, None, seqs)
+                            f = estimate(spec, mem, ctx, tp, kvb, 0.92, None, seqs)
                             sp = estimate_speed(spec, g["bandwidth_gbs"], ctx, tp, kvb, seqs)
                             cases.append([m["name"], mem, ctx, tp, kvb, seqs, g["bandwidth_gbs"]])
                             expected.append([round(f.kv_pool_gib, 6), f.kv_tokens, f.max_context_one_request,
@@ -40,7 +40,7 @@ const data = require({json.dumps(sys.argv[1])});
 const byName = Object.fromEntries(data.models.map(m => [m.name, m]));
 const cases = {json.dumps(cases)};
 const out = cases.map(([n, mem, ctx, tp, kvb, seqs, bw]) => {{
-  const f = G.estimate(byName[n], mem, ctx, {{tp, kvBytes: kvb, util: 0.9, maxNumSeqs: seqs}});
+  const f = G.estimate(byName[n], mem, ctx, {{tp, kvBytes: kvb, util: 0.92, maxNumSeqs: seqs}});
   const sp = G.estimateSpeed(byName[n], bw, ctx, {{tp, kvBytes: kvb, users: seqs}});
   return [Math.round(f.kvPoolGib * 1e6) / 1e6, f.kvTokens, f.maxContextOneRequest, f.hybridSlots, f.fits,
           Math.round(Math.min(f.concurrent, 1e9) * 1e6) / 1e6,

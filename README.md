@@ -61,14 +61,39 @@ Most calculators multiply parameters by bytes and add a guess. Modern models bre
 
 ```
 gpu-fit MODEL [--gpu L40S | --gpu-mem-gib 48] [--tp 2] [--context 128k]
-              [--concurrency 8] [--max-num-seqs 32] [--kv-cache-dtype fp8] [--util 0.9]
-              [--overhead-gib 2.0] [--bandwidth-gbs 864] [--json]
+              [--concurrency 8] [--max-num-seqs 32] [--kv-cache-dtype fp8] [--util 0.92]
+              [--reserve-gib 12] [--overhead-gib 2.0] [--bandwidth-gbs 864] [--json]
 ```
 
 - `MODEL`: a Hugging Face id, or a local folder with `config.json` and `*.safetensors`.
   Gated models need `HF_TOKEN` in the environment.
 - Leave out `--gpu` to compare every GPU in the catalog with the smallest tensor-parallel size that works.
 - `--json` for scripts and CI.
+
+## Sharing the GPU with something else
+
+vLLM grabs a fixed share of the GPU at startup and doesn't coordinate with anything else on
+the card: an OCR model, an embedding server, a second vLLM, or the old pod during a rolling
+deploy. It refuses to start if free memory is below `total × gpu_memory_utilization`, and if
+the other process grows later, someone runs out of memory.
+
+Tell gpu-fit how much the other processes need per GPU and it works out the highest
+`--gpu-memory-utilization` vLLM will accept, and what still fits in what's left:
+
+```
+gpu-fit Qwen/Qwen3-8B --gpu L40S --reserve-gib 12 --context 16k --concurrency 8 --kv-cache-dtype fp8
+...
+✓ Fits. Suggested command:
+
+  vllm serve Qwen/Qwen3-8B \
+  --max-model-len 16384 \
+  --kv-cache-dtype fp8 \
+  --max-num-seqs 8 \
+  --gpu-memory-utilization 0.72
+```
+
+Start the other processes first, and size `--reserve-gib` for their peak, not their idle use.
+gpu-fit keeps 0.5 GiB back for vLLM's own CUDA context at startup.
 
 ## How the maths works
 
@@ -103,9 +128,15 @@ Predicted vs what vLLM 0.31 actually allocated on an AWS g6e.xlarge (1× L40S 48
 | Qwen/Qwen3.6-35B-A3B-FP8 | hybrid MoE + vision | 179,361 | 159,023 | −11.3% (cautious) |
 
 - Weights and KV per token come straight from the config, so they're exact.
-- Runtime overhead (activations, CUDA graphs) is calibrated from these runs: about
-  1.25 GiB for text models and 2 GiB when vLLM also profiles a vision encoder, plus a
-  little more for each `--max-num-seqs` slot. Override it with `--overhead-gib`.
+- Runtime overhead (activations, CUDA graphs, non-torch memory) is calibrated from these
+  runs at vLLM's default `gpu_memory_utilization` of **0.92**: about 2.15 GiB for text models
+  and 2.9 GiB when vLLM also profiles a vision encoder, plus a little more for each
+  `--max-num-seqs` slot. Override it with `--overhead-gib`. (Before 0.4.0 gpu-fit assumed a
+  0.9 default and a smaller overhead; predictions at the default are unchanged.)
+- **vLLM 0.34 changed this.** On CUDA it now sizes the KV cache from memory actually free
+  after warm-up ("extensible KV cache") and uses the whole GPU unless you set
+  `--gpu-memory-utilization`. Not measured yet: expect more KV capacity than gpu-fit predicts;
+  the estimate stays on the safe side. Measurements on 0.34 are next.
 - **Hybrid models have a hard limit on `--max-num-seqs`.** Each request needs one
   recurrent-state slot. Ask for more slots than fit and vLLM refuses to start; gpu-fit
   tells you the limit first (it predicted 156 where vLLM reported 164).
@@ -120,6 +151,9 @@ Every measurement improves the defaults for everyone.
 - [x] Hybrid `--max-num-seqs` limit warning
 - [x] Browser calculator
 - [x] Decode speed estimate, MoE-aware
+- [x] Shared-GPU budgeting (`--reserve-gib`)
+- [ ] Re-measure on vLLM 0.34 (extensible KV cache)
+- [ ] Workload mode: safe concurrency, throughput and cost per 1,000 requests
 - [ ] Speed calibrated against measured vLLM throughput
 - [ ] More GPUs measured (L4, H100) and models (Llama, Gemma, Mistral) from community results
 - [ ] Prompt-processing (prefill) time and time-to-first-token

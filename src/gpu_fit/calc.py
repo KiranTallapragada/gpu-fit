@@ -15,12 +15,15 @@ from typing import Optional
 from .model import ModelSpec
 
 GIB = 1024**3
+# vLLM's default gpu_memory_utilization (0.92 since at least v0.29; v0.34 sizes the KV cache
+# from measured memory instead and uses 1.0 unless you set it).
+VLLM_DEFAULT_UTIL = 0.92
 
 # Activations + CUDA graphs + non-torch memory per GPU, measured at --max-num-seqs 32
-# (bench/results/l40s-vllm0.31.0.tsv): ~1.1-1.4 GiB for text models, ~2.0 GiB when vLLM
+# (bench/results/l40s-vllm0.31.0.tsv, at the default 0.92): ~2.0-2.3 GiB for text models, ~2.9 GiB when vLLM
 # also profiles a vision encoder. Override with --overhead-gib.
-OVERHEAD_TEXT_GIB = 1.25
-OVERHEAD_MULTIMODAL_GIB = 2.0
+OVERHEAD_TEXT_GIB = 2.15
+OVERHEAD_MULTIMODAL_GIB = 2.9
 # CUDA-graph capture grows with --max-num-seqs: 256 slots cost ~0.85 GiB more than 32.
 OVERHEAD_PER_SEQ_GIB = 0.0038
 BASE_SEQS = 32
@@ -66,7 +69,7 @@ def estimate(
     context: int,
     tp: int = 1,
     kv_dtype_bytes: int = 2,
-    utilization: float = 0.90,
+    utilization: float = VLLM_DEFAULT_UTIL,
     overhead_gib: Optional[float] = None,
     max_num_seqs: int = VLLM_DEFAULT_MAX_NUM_SEQS,
 ) -> Fit:
