@@ -5,9 +5,9 @@ import json
 import sys
 from dataclasses import asdict
 
-from . import __version__
 import math
 
+from . import __version__
 from .calc import VLLM_DEFAULT_MAX_NUM_SEQS, VLLM_DEFAULT_UTIL, estimate, estimate_speed
 from .gpus import GPUS, get_gpu
 from .model import load_model
@@ -18,9 +18,10 @@ STARTUP_MARGIN_GIB = 0.5
 
 
 def resolve_util(gpu_mem: float, args) -> float:
-    """gpu_memory_utilization to use. With --reserve-gib, the highest value vLLM will accept
-    when other processes already hold that much memory on each GPU: vLLM refuses to start if
-    free memory < total x utilization."""
+    """gpu_memory_utilization to use. With --reserve-gib, an estimate of the highest value that
+    leaves room for other processes holding that much memory on each GPU. (With estimate-based
+    sizing, vLLM <= 0.33, vLLM refuses to start if free memory < total x utilization; the 0.5 GiB
+    startup margin is an estimate.)"""
     util = args.util if args.util is not None else VLLM_DEFAULT_UTIL
     if args.reserve_gib:
         room = gpu_mem - args.reserve_gib - STARTUP_MARGIN_GIB
@@ -50,8 +51,8 @@ def _command(model: str, fit, args, util: float) -> str:
     if args.kv_cache_dtype == "fp8":
         parts.append("--kv-cache-dtype fp8")
     parts.append(f"--max-num-seqs {fit.max_num_seqs}")
-    if util != VLLM_DEFAULT_UTIL or args.reserve_gib:
-        parts.append(f"--gpu-memory-utilization {util}")
+    # Always explicit: vLLM 0.34+ uses 1.0 when the flag is unset (extensible KV cache).
+    parts.append(f"--gpu-memory-utilization {util}")
     return " \\\n  ".join(parts)
 
 
@@ -130,8 +131,9 @@ def report_one(spec, gpu_name, gpu_mem, args, bandwidth_gbs=0) -> int:
               f" (you asked for {need}). Try {tips}.")
     else:
         if args.reserve_gib:
-            print(f"\n  note: start the other processes first; vLLM needs {util * gpu_mem:.1f} GiB free"
-                  f" per GPU at startup. If they grow after vLLM starts, raise --reserve-gib.")
+            print(f"\n  note: start the other processes first; vLLM requests {util * gpu_mem:.1f} GiB"
+                  " per GPU (an estimate that keeps a 0.5 GiB margin). If they grow after vLLM"
+                  " starts, raise --reserve-gib.")
         print(f"\n✓ Fits. Suggested command:\n\n  {_command(spec.name, fit, args, util)}")
     print()
     return 0 if ok else 1
@@ -141,8 +143,10 @@ def report_scan(spec, args) -> int:
     kv_bytes = 1 if args.kv_cache_dtype == "fp8" else 2
     need = args.concurrency or 1
     results = []
+    utils = {}
     for gpu in GPUS.values():
         util = resolve_util(gpu.memory_gib, args)
+        utils[gpu.name] = util
         for tp in TP_SIZES:
             if util <= 0:
                 continue
@@ -155,7 +159,9 @@ def report_scan(spec, args) -> int:
             results.append((gpu, None))
 
     if args.json:
-        print(json.dumps([{"gpu": g.name, "fits": f is not None, **(asdict(f) if f else {})}
+        print(json.dumps([{"gpu": g.name, "fits": f is not None,
+                           "gpu_memory_utilization": utils[g.name],
+                           "reserve_gib": args.reserve_gib or 0, **(asdict(f) if f else {})}
                           for g, f in results], indent=2))
         return 0
 
@@ -166,7 +172,8 @@ def report_scan(spec, args) -> int:
     print(f"  {'GPU':<13}{'smallest setup':<16}{'requests at full ctx':>22}{'KV tokens':>14}")
     for gpu, fit in results:
         if fit is None:
-            print(f"  {gpu.name:<13}does not fit on 8 or fewer")
+            print(f"  {gpu.name:<13}" + ("no room after the reserve" if utils[gpu.name] <= 0
+                                            else "does not fit on 8 or fewer"))
         else:
             print(f"  {gpu.name:<13}{f'{fit.tp}× {gpu.name}':<16}{fit.concurrent:>22.1f}{_fmt_tokens(fit.kv_tokens):>14}")
     print("\nDetail for one option: gpu-fit MODEL --gpu <name> --tp <n> ...\n")
@@ -189,12 +196,16 @@ def main(argv=None) -> int:
                    help=f"gpu_memory_utilization (default: vLLM's {VLLM_DEFAULT_UTIL})")
     p.add_argument("--reserve-gib", type=float, default=0,
                    help="GiB per GPU already used by other processes (OCR, embeddings, a second"
-                        " model); sets the highest --gpu-memory-utilization vLLM will accept")
+                        " model); estimates the highest --gpu-memory-utilization that leaves room")
     p.add_argument("--overhead-gib", type=float, help="runtime overhead per GPU (default: measured, by model type)")
     p.add_argument("--bandwidth-gbs", type=float, help="GPU memory bandwidth in GB/s (default: from catalog)")
     p.add_argument("--json", action="store_true", help="machine-readable output")
     p.add_argument("--version", action="version", version=f"gpu-fit {__version__}")
     args = p.parse_args(argv)
+    if args.reserve_gib is None or not math.isfinite(args.reserve_gib) or args.reserve_gib < 0:
+        p.error("--reserve-gib must be a number >= 0")
+    if args.util is not None and (not math.isfinite(args.util) or not 0 < args.util <= 1):
+        p.error("--util must be greater than 0 and at most 1")
 
     spec = load_model(args.model)
     if args.gpu_mem_gib:

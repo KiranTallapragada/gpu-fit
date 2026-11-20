@@ -12,7 +12,7 @@ many requests fit at full context, and the longest single request. Then it print
 `vllm serve` command.
 
 **New in 0.4:** sharing the GPU with something else? `--reserve-gib` gives the exact
-`--gpu-memory-utilization` vLLM will accept ([details](#sharing-the-gpu-with-something-else)).
+`--gpu-memory-utilization` that leaves room for the others ([details](#sharing-the-gpu-with-something-else)).
 
 ```
 $ gpu-fit Qwen/Qwen3-32B --context 32k --concurrency 4
@@ -38,7 +38,7 @@ $ gpu-fit deepseek-ai/DeepSeek-V3 --gpu H200 --tp 8 --context 128k
   Longest single request         163,840 tokens
 
 ✓ Fits. Suggested command:
-  vllm serve deepseek-ai/DeepSeek-V3 --max-model-len 131072 --tensor-parallel-size 8 --max-num-seqs 256
+  vllm serve deepseek-ai/DeepSeek-V3 --max-model-len 131072 --tensor-parallel-size 8 --max-num-seqs 256 --gpu-memory-utilization 0.92
 ```
 
 ## Install
@@ -60,7 +60,7 @@ A parameters-times-bytes estimate is a good start. Newer architectures change th
 | FP8 / AWQ / GPTQ checkpoints | Exact weight size from the safetensors metadata | ✓ |
 | Tensor parallel beyond KV heads | KV heads get replicated, not split | ✓ |
 | Hybrid `--max-num-seqs` limit | vLLM refuses to start above the state-slot count | ✓ warns first |
-| FP8 KV cache | Doubles capacity: `--kv-cache-dtype fp8` | ✓ |
+| FP8 KV cache | About twice the KV-token capacity: `--kv-cache-dtype fp8` | ✓ |
 
 ## Options
 
@@ -79,11 +79,13 @@ gpu-fit MODEL [--gpu L40S | --gpu-mem-gib 48] [--tp 2] [--context 128k]
 
 vLLM grabs a fixed share of the GPU at startup and doesn't coordinate with anything else on
 the card: an OCR model, an embedding server, a second vLLM, or the old pod during a rolling
-deploy. It refuses to start if free memory is below `total × gpu_memory_utilization`, and if
-the other process grows later, someone runs out of memory.
+deploy. With estimate-based sizing (vLLM 0.33 and earlier) it refuses to start if free memory
+is below `total × gpu_memory_utilization`. vLLM 0.34's extensible KV cache skips that startup
+check, but the budget still caps vLLM's memory. Either way, if the other process grows later,
+something runs out of memory.
 
-Tell gpu-fit how much the other processes need per GPU and it works out the highest
-`--gpu-memory-utilization` vLLM will accept, and what still fits in what's left:
+Tell gpu-fit how much the other processes need per GPU and it estimates the highest
+`--gpu-memory-utilization` that leaves room for them, and what still fits in what's left:
 
 ```
 gpu-fit Qwen/Qwen3-8B --gpu L40S --reserve-gib 12 --context 16k --concurrency 8 --kv-cache-dtype fp8
@@ -98,7 +100,8 @@ gpu-fit Qwen/Qwen3-8B --gpu L40S --reserve-gib 12 --context 16k --concurrency 8 
 ```
 
 Start the other processes first, and size `--reserve-gib` for their peak, not their idle use.
-gpu-fit keeps 0.5 GiB back for vLLM's own CUDA context at startup.
+gpu-fit keeps an estimated 0.5 GiB back for vLLM's own CUDA context. Suggested commands always
+state `--gpu-memory-utilization`, because vLLM 0.34 uses the whole GPU when it's left out.
 
 ## How the maths works
 

@@ -1,18 +1,29 @@
 #!/bin/sh
 # Concurrency sweep with vLLM's own `vllm bench sweep serve` (vLLM >= 0.34).
-# Starts the server once per setting, runs the benchmark at concurrency 1..32,
-# and writes one JSON result per step. Then: python3 summarise.py <output-dir>
+# Starts the server, runs the benchmark at concurrency 1..32 and writes one JSON
+# result per step. Then: python3 summarise.py <output-dir>
 # Status: flags checked against vLLM 0.34 source; not yet run on a GPU.
 #
 # Usage: ./run.sh MODEL [INPUT_TOKENS] [OUTPUT_TOKENS] [extra vllm serve flags...]
 #   ./run.sh Qwen/Qwen3-8B 2000 400 --max-model-len 8192
+# Extra flags keep their quoting. If you pass --port N, the benchmark uses the same port.
 set -eu
-MODEL=$1; IN=${2:-2000}; OUT=${3:-400}; shift; [ $# -gt 0 ] && shift; [ $# -gt 0 ] && shift
-DIR=results-$(echo "$MODEL" | tr '/' '_')-in$IN-out$OUT-$(date +%Y%m%d-%H%M)
+MODEL=$1; IN=${2:-2000}; OUT=${3:-400}
+shift; [ $# -gt 0 ] && shift; [ $# -gt 0 ] && shift
 HERE=$(cd "$(dirname "$0")" && pwd)
+DIR=results-$(echo "$MODEL" | tr '/' '_')-in$IN-out$OUT-$(date +%Y%m%d-%H%M)
+# Quote the extra flags safely and pick up --port if given.
+EXTRA=$(python3 -c 'import shlex,sys; print(shlex.join(sys.argv[1:]))' "$@")
+PORT=$(python3 -c '
+import sys
+a = sys.argv[1:]
+for i, x in enumerate(a):
+    if x == "--port" and i + 1 < len(a): print(a[i + 1]); break
+    if x.startswith("--port="): print(x.split("=", 1)[1]); break
+else: print(8000)' "$@")
 vllm bench sweep serve \
-  --serve-cmd "vllm serve $MODEL $* --max-num-seqs 32" \
-  --bench-cmd "vllm bench serve --model $MODEL --dataset-name random \
+  --serve-cmd "vllm serve $(python3 -c 'import shlex,sys; print(shlex.quote(sys.argv[1]))' "$MODEL") $EXTRA --max-num-seqs 32" \
+  --bench-cmd "vllm bench serve --model $MODEL --port $PORT --dataset-name random \
     --random-input-len $IN --random-output-len $OUT --ignore-eos --seed 0 \
     --percentile-metrics ttft,tpot,e2el --metric-percentiles 50,99" \
   --bench-params "$HERE/concurrency.json" \

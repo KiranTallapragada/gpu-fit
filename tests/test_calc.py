@@ -173,3 +173,40 @@ class TestReserve(unittest.TestCase):
                 u = resolve_util(mem, self._args(reserve))
                 if u > 0:
                     self.assertLessEqual(u * mem, mem - reserve - STARTUP_MARGIN_GIB + 1e-9)
+
+
+class TestCliValidationAndCommand(unittest.TestCase):
+    def _run(self, *argv):
+        import contextlib
+        import io
+        from unittest import mock
+        from gpu_fit import cli
+        spec = spec_from_config("Org/Dense", DENSE, 16 * GIB)
+        out, err = io.StringIO(), io.StringIO()
+        with mock.patch.object(cli, "load_model", return_value=spec), \
+                contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+            try:
+                code = cli.main(list(argv))
+            except SystemExit as e:
+                code = e.code
+        return code, out.getvalue(), err.getvalue()
+
+    def test_command_always_states_utilization(self):
+        code, out, _ = self._run("Org/Dense", "--gpu", "H100", "--context", "8k")
+        self.assertEqual(code, 0)
+        self.assertIn("--gpu-memory-utilization 0.92", out)
+
+    def test_invalid_reserve_and_util_are_usage_errors(self):
+        for argv in (["--reserve-gib", "-1"], ["--reserve-gib", "nan"], ["--reserve-gib", "inf"],
+                     ["--util", "0"], ["--util", "1.5"], ["--util", "nan"]):
+            code, _, err = self._run("Org/Dense", "--gpu", "H100", *argv)
+            self.assertEqual(code, 2, argv)
+
+    def test_scan_json_has_util_and_reserve_per_gpu(self):
+        import json
+        code, out, _ = self._run("Org/Dense", "--reserve-gib", "10", "--json")
+        rows = json.loads(out)
+        self.assertEqual(code, 0)
+        self.assertTrue(all("gpu_memory_utilization" in r and r["reserve_gib"] == 10 for r in rows))
+        l4 = [r for r in rows if r["gpu"] == "L4"][0]
+        self.assertLess(l4["gpu_memory_utilization"], 0.92)
