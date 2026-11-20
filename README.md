@@ -1,5 +1,7 @@
 # gpu-fit
 
+[![PyPI](https://img.shields.io/pypi/v/gpu-fit)](https://pypi.org/project/gpu-fit/) [![Tests](https://github.com/KiranTallapragada/gpu-fit/actions/workflows/test.yml/badge.svg)](https://github.com/KiranTallapragada/gpu-fit/actions/workflows/test.yml) [![Python](https://img.shields.io/pypi/pyversions/gpu-fit)](https://pypi.org/project/gpu-fit/) [![License: MIT](https://img.shields.io/badge/license-MIT-blue)](LICENSE)
+
 **[Try it in your browser →](https://kiran-tallapragada.pages.dev/gpu-fit/)** · no install, nothing leaves your browser
 
 **Will this LLM fit on this GPU, at this context length, for this many users, and how fast?**
@@ -9,31 +11,34 @@ from Hugging Face and works out vLLM's memory budget: weights, runtime overhead,
 many requests fit at full context, and the longest single request. Then it prints the
 `vllm serve` command.
 
+**New in 0.4:** sharing the GPU with something else? `--reserve-gib` gives the exact
+`--gpu-memory-utilization` vLLM will accept ([details](#sharing-the-gpu-with-something-else)).
+
 ```
 $ gpu-fit Qwen/Qwen3-32B --context 32k --concurrency 4
 
   GPU          smallest setup    requests at full ctx     KV tokens
-  L4           8× L4                             10.6       347,888
-  L40S         4× L40S                           11.6       380,656
-  A100-80      2× A100-80                         9.9       323,484
-  H100         2× H100                            9.8       320,885
-  H200         1× H200                            7.9       259,428
+  L4           8× L4                             11.0       361,200
+  L40S         4× L40S                           12.0       394,683
+  A100-80      2× A100-80                        10.3       336,234
+  H100         2× H100                           10.2       333,577
+  H200         1× H200                            8.3       270,751
   ...
 ```
 
 ```
 $ gpu-fit deepseek-ai/DeepSeek-V3 --gpu H200 --tp 8 --context 128k
 
-  vLLM budget per GPU             126.4 GiB
-    weights                        80.1 GiB
-    runtime overhead                2.0 GiB
-    left for KV cache              44.2 GiB
-  KV cache capacity              675,671 tokens
-  Requests at full context       5.2
+  vLLM budget per GPU             129.2 GiB
+    weights                        80.2 GiB
+    runtime overhead                3.0 GiB
+    left for KV cache              46.0 GiB
+  KV cache capacity              702,962 tokens
+  Requests at full context       5.4
   Longest single request         163,840 tokens
 
 ✓ Fits. Suggested command:
-  vllm serve deepseek-ai/DeepSeek-V3 --max-model-len 131072 --tensor-parallel-size 8 --max-num-seqs 5
+  vllm serve deepseek-ai/DeepSeek-V3 --max-model-len 131072 --tensor-parallel-size 8 --max-num-seqs 256
 ```
 
 ## Install
@@ -122,10 +127,10 @@ Predicted vs what vLLM 0.31 actually allocated on an AWS g6e.xlarge (1× L40S 48
 
 | Model | Type | KV tokens (vLLM) | KV tokens (gpu-fit) | Error |
 |---|---|---|---|---|
-| Qwen/Qwen3-8B | dense | 175,696 | 174,639 | −0.6% |
-| Qwen/Qwen3-14B | dense | 75,888 | 76,882 | +1.3% |
-| Qwen/Qwen3.8-27B-FP8 | hybrid + vision | 137,216 | 134,122 | −2.3% |
-| Qwen/Qwen3.6-35B-A3B-FP8 | hybrid MoE + vision | 179,361 | 159,023 | −11.3% (cautious) |
+| Qwen/Qwen3-8B | dense | 175,696 | 174,637 | −0.6% |
+| Qwen/Qwen3-14B | dense | 75,888 | 76,880 | +1.3% |
+| Qwen/Qwen3.8-27B-FP8 | hybrid + vision | 137,216 | 134,077 | −2.3% |
+| Qwen/Qwen3.6-35B-A3B-FP8 | hybrid MoE + vision | 179,361 | 158,477 | −11.6% (cautious) |
 
 - Weights and KV per token come straight from the config, so they're exact.
 - Runtime overhead (activations, CUDA graphs, non-torch memory) is calibrated from these

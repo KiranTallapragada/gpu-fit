@@ -1,0 +1,38 @@
+name: Share a measurement
+description: What vLLM actually allocated on your GPU. The most useful contribution there is.
+title: "measurement: <model> on <GPU>"
+labels: ["measurement"]
+body:
+  - type: markdown
+    attributes:
+      value: Public models and your own hardware only. No prompts, keys or private data.
+  - type: input
+    id: model
+    attributes: { label: Model id, placeholder: Qwen/Qwen3-8B }
+    validations: { required: true }
+  - type: input
+    id: gpu
+    attributes: { label: GPU and count, placeholder: 1× L40S 48 GB }
+    validations: { required: true }
+  - type: input
+    id: vllm
+    attributes: { label: vLLM version, placeholder: "0.34.0 (vllm --version)" }
+    validations: { required: true }
+  - type: textarea
+    id: flags
+    attributes:
+      label: vllm serve flags
+      placeholder: --max-model-len 32768 --max-num-seqs 32 --kv-cache-dtype auto --gpu-memory-utilization 0.92
+    validations: { required: true }
+  - type: textarea
+    id: log
+    attributes:
+      label: Lines from the vLLM log
+      description: Model loading memory, available KV cache memory, GPU KV cache size.
+      render: text
+    validations: { required: true }
+  - type: textarea
+    id: predicted
+    attributes:
+      label: What gpu-fit predicted for the same settings
+      render: text

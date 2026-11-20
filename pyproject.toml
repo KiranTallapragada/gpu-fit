@@ -4,17 +4,27 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "gpu-fit"
-version = "0.4.0"
-description = "Will this LLM fit on this GPU? vLLM memory maths: weights, KV cache, context and concurrency."
+version = "0.4.1"
+description = "Will this LLM fit on this GPU? vLLM memory maths: weights, KV cache, context, concurrency and shared GPUs. Calibrated on real runs."
 readme = "README.md"
 requires-python = ">=3.10"
 license = "MIT"
 license-files = ["LICENSE"]
 authors = [{ name = "Kiran Tallapragada" }]
-keywords = ["llm", "vllm", "gpu", "kv-cache", "inference", "vram", "self-hosting"]
+keywords = ["llm", "vllm", "gpu", "kv-cache", "inference", "vram", "self-hosting", "capacity-planning", "quantization"]
 classifiers = [
+  "Development Status :: 4 - Beta",
+  "Environment :: Console",
+  "Intended Audience :: Developers",
+  "Intended Audience :: System Administrators",
+  "Operating System :: OS Independent",
   "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3.10",
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
+  "Programming Language :: Python :: 3.13",
   "Topic :: Scientific/Engineering :: Artificial Intelligence",
+  "Topic :: System :: Systems Administration",
 ]
 dependencies = []
 
@@ -23,6 +33,9 @@ gpu-fit = "gpu_fit.cli:main"
 
 [project.urls]
 Homepage = "https://github.com/KiranTallapragada/gpu-fit"
+Calculator = "https://kiran-tallapragada.pages.dev/gpu-fit/"
+Changelog = "https://github.com/KiranTallapragada/gpu-fit/releases"
+Issues = "https://github.com/KiranTallapragada/gpu-fit/issues"
 
 [tool.setuptools.packages.find]
 where = ["src"]
