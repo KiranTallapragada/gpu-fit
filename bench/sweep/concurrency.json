@@ -1,0 +1,42 @@
+[
+ {
+  "_benchmark_name": "c01",
+  "max_concurrency": 1,
+  "num_prompts": 16
+ },
+ {
+  "_benchmark_name": "c02",
+  "max_concurrency": 2,
+  "num_prompts": 16
+ },
+ {
+  "_benchmark_name": "c04",
+  "max_concurrency": 4,
+  "num_prompts": 32
+ },
+ {
+  "_benchmark_name": "c08",
+  "max_concurrency": 8,
+  "num_prompts": 64
+ },
+ {
+  "_benchmark_name": "c12",
+  "max_concurrency": 12,
+  "num_prompts": 96
+ },
+ {
+  "_benchmark_name": "c16",
+  "max_concurrency": 16,
+  "num_prompts": 128
+ },
+ {
+  "_benchmark_name": "c24",
+  "max_concurrency": 24,
+  "num_prompts": 192
+ },
+ {
+  "_benchmark_name": "c32",
+  "max_concurrency": 32,
+  "num_prompts": 256
+ }
+]
