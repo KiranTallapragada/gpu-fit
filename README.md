@@ -47,9 +47,9 @@ $ gpu-fit deepseek-ai/DeepSeek-V3 --gpu H200 --tp 8 --context 128k
 pip install gpu-fit        # no dependencies, Python 3.10+
 ```
 
-## Why another VRAM calculator?
+## What gpu-fit models
 
-Most calculators multiply parameters by bytes and add a guess. Modern models break that:
+A parameters-times-bytes estimate is a good start. Newer architectures change the answer, so gpu-fit reads them:
 
 | Architecture | What changes | gpu-fit |
 |---|---|---|
