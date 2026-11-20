@@ -6,24 +6,36 @@
 #
 # Usage: ./run.sh MODEL [INPUT_TOKENS] [OUTPUT_TOKENS] [extra vllm serve flags...]
 #   ./run.sh Qwen/Qwen3-8B 2000 400 --max-model-len 8192
-# Extra flags keep their quoting. If you pass --port N, the benchmark uses the same port.
+# Extra flags keep their quoting. --port N (or --port=N, -p N) is passed to the benchmark too.
 set -eu
 MODEL=$1; IN=${2:-2000}; OUT=${3:-400}
 shift; [ $# -gt 0 ] && shift; [ $# -gt 0 ] && shift
 HERE=$(cd "$(dirname "$0")" && pwd)
 DIR=results-$(echo "$MODEL" | tr '/' '_')-in$IN-out$OUT-$(date +%Y%m%d-%H%M)
-# Quote the extra flags safely and pick up --port if given.
-EXTRA=$(python3 -c 'import shlex,sys; print(shlex.join(sys.argv[1:]))' "$@")
+# Quote the extra flags safely and normalise --port=N / -p N to "--port N": vLLM's sweep
+# readiness check only reads the two-word form, so server, check and benchmark agree.
+EXTRA=$(python3 -c '
+import shlex, sys
+a, out = sys.argv[1:], []
+i = 0
+while i < len(a):
+    x = a[i]
+    if x.startswith("--port="):
+        out += ["--port", x.split("=", 1)[1]]
+    elif x in ("-p", "--port") and i + 1 < len(a):
+        out += ["--port", a[i + 1]]; i += 1
+    else:
+        out.append(x)
+    i += 1
+print(shlex.join(out))' "$@")
 PORT=$(python3 -c '
-import sys
-a = sys.argv[1:]
-for i, x in enumerate(a):
-    if x == "--port" and i + 1 < len(a): print(a[i + 1]); break
-    if x.startswith("--port="): print(x.split("=", 1)[1]); break
-else: print(8000)' "$@")
+import shlex, sys
+a = shlex.split(sys.argv[1])
+print(a[a.index("--port") + 1] if "--port" in a else 8000)' "$EXTRA")
+QMODEL=$(python3 -c 'import shlex, sys; print(shlex.quote(sys.argv[1]))' "$MODEL")
 vllm bench sweep serve \
-  --serve-cmd "vllm serve $(python3 -c 'import shlex,sys; print(shlex.quote(sys.argv[1]))' "$MODEL") $EXTRA --max-num-seqs 32" \
-  --bench-cmd "vllm bench serve --model $MODEL --port $PORT --dataset-name random \
+  --serve-cmd "vllm serve $QMODEL $EXTRA --max-num-seqs 32" \
+  --bench-cmd "vllm bench serve --model $QMODEL --port $PORT --dataset-name random \
     --random-input-len $IN --random-output-len $OUT --ignore-eos --seed 0 \
     --percentile-metrics ttft,tpot,e2el --metric-percentiles 50,99" \
   --bench-params "$HERE/concurrency.json" \

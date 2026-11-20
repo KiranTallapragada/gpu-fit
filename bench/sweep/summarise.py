@@ -1,8 +1,9 @@
 """Turn a `vllm bench sweep serve` output folder into one table: where does it stop scaling?
 
-Repeated runs at the same concurrency are combined by their median. Warm-up results (files or
-folders with "warmup" in the name) are skipped. Failed requests are reported when the results
-include them.
+Repeated runs at the same concurrency are combined by their median. vLLM's warm-up
+(warmup.json) and per-step summary (summary.json) files are skipped so nothing is counted twice.
+Failed requests are reported when the results include them, and failed runs (*.failure.json)
+are listed separately.
 
 Usage: python3 summarise.py <output-dir> [--markdown]
 """
@@ -16,11 +17,14 @@ COLS = [("request_throughput", "req/s", "{:.2f}"), ("output_throughput", "out to
         ("p99_e2el_ms", "latency p99 s", "{:.1f}")]
 
 
-def load(root: pathlib.Path) -> dict:
-    """Results grouped by concurrency."""
+def load(root: pathlib.Path):
+    """Results grouped by concurrency, plus the failure files found."""
     groups: dict = {}
+    failures = sorted(str(f.relative_to(root)) for f in root.rglob("*failure.json"))
     for f in root.rglob("*.json"):
-        if "warmup" in str(f.relative_to(root)).lower():
+        name = f.name.lower()
+        if name in ("warmup.json", "summary.json") or name.endswith("failure.json") \
+                or "warmup" in str(f.relative_to(root)).lower():
             continue
         try:
             d = json.loads(f.read_text())
@@ -28,7 +32,7 @@ def load(root: pathlib.Path) -> dict:
             continue
         if isinstance(d, dict) and "request_throughput" in d and d.get("max_concurrency"):
             groups.setdefault(int(d["max_concurrency"]), []).append(d)
-    return groups
+    return groups, failures
 
 
 def median_of(runs: list, key: str):
@@ -38,9 +42,11 @@ def median_of(runs: list, key: str):
 
 def main() -> None:
     root, md = pathlib.Path(sys.argv[1]), "--markdown" in sys.argv
-    groups = load(root)
+    groups, failures = load(root)
+    for f in failures:
+        print(f"failed run: {f}")
     if not groups:
-        sys.exit(f"no benchmark results under {root}")
+        sys.exit(f"no successful benchmark results under {root}")
     rows = []
     for conc in sorted(groups):
         runs = groups[conc]
