@@ -1,3 +1,3 @@
 """Will this LLM fit on this GPU? vLLM memory maths from the model config."""
 
-__version__ = "0.4.2"
+__version__ = "1.0.0"

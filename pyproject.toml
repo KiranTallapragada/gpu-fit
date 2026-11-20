@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "gpu-fit"
-version = "0.4.2"
+version = "1.0.0"
 description = "Will this LLM fit on this GPU? vLLM memory maths: weights, KV cache, context, concurrency and shared GPUs. Calibrated on real runs."
 readme = "README.md"
 requires-python = ">=3.10"
@@ -13,7 +13,7 @@ license-files = ["LICENSE"]
 authors = [{ name = "Kiran Tallapragada" }]
 keywords = ["llm", "vllm", "gpu", "kv-cache", "inference", "vram", "self-hosting", "capacity-planning", "quantization"]
 classifiers = [
-  "Development Status :: 4 - Beta",
+  "Development Status :: 5 - Production/Stable",
   "Environment :: Console",
   "Intended Audience :: Developers",
   "Intended Audience :: System Administrators",

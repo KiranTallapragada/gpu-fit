@@ -198,7 +198,7 @@ def main(argv=None) -> int:
                    help="vLLM request slots (default: --concurrency, else vLLM's 256)")
     p.add_argument("--kv-cache-dtype", choices=["auto", "fp8"], default="auto")
     p.add_argument("--util", type=float,
-                   help=f"gpu_memory_utilization (default: vLLM's {VLLM_DEFAULT_UTIL})")
+                   help=f"gpu_memory_utilization (default {VLLM_DEFAULT_UTIL}, vLLM's default up to 0.33)")
     p.add_argument("--reserve-gib", type=float, default=0,
                    help="GiB per GPU already used by other processes (OCR, embeddings, a second"
                         " model); estimates the highest --gpu-memory-utilization that leaves room")

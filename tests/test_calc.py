@@ -216,3 +216,22 @@ class TestCliValidationAndCommand(unittest.TestCase):
         code, out, _ = self._run("Org/Dense", "--gpu-mem-gib", "22", "--context", "128k")
         self.assertEqual(code, 1)
         self.assertIn("won't start with --max-model-len 131072", out)
+
+
+class TestJsonContract(unittest.TestCase):
+    """The --json fields documented as stable in 1.x."""
+
+    def test_single_gpu_json_fields(self):
+        import contextlib, io, json
+        from unittest import mock
+        from gpu_fit import cli
+        from gpu_fit.model import spec_from_config
+        spec = spec_from_config("dense", DENSE, 16 * GIB)
+        buf = io.StringIO()
+        with mock.patch.object(cli, "load_model", return_value=spec), contextlib.redirect_stdout(buf):
+            cli.main(["dense", "--gpu-mem-gib", "80", "--json"])
+        d = json.loads(buf.getvalue())
+        for key in ("model", "gpu", "fits", "gpu_memory_utilization", "reserve_gib", "budget_gib",
+                    "weights_gib", "overhead_gib", "kv_pool_gib", "kv_tokens", "concurrent",
+                    "max_num_seqs", "speed"):
+            self.assertIn(key, d)

@@ -11,8 +11,8 @@ from Hugging Face and works out vLLM's memory budget: weights, runtime overhead,
 many requests fit at full context, and the longest single request. Then it prints the
 `vllm serve` command.
 
-**New in 0.4:** sharing the GPU with something else? `--reserve-gib` gives the exact
-`--gpu-memory-utilization` that leaves room for the others ([details](#sharing-the-gpu-with-something-else)).
+**Sharing the GPU with something else?** `--reserve-gib` estimates the `--gpu-memory-utilization`
+that leaves room for the other processes ([details](#sharing-the-gpu-with-something-else)).
 
 ```
 $ gpu-fit Qwen/Qwen3-32B --context 32k --concurrency 4
@@ -151,8 +151,16 @@ Predicted vs what vLLM 0.31 actually allocated on an AWS g6e.xlarge (1× L40S 48
   tells you the limit first (it predicted 156 where vLLM reported 164).
 - Treat the output as a planning estimate and confirm on the real GPU before you commit money.
 
-**Help make it exact:** share what vLLM printed on your hardware (see [CONTRIBUTING.md](CONTRIBUTING.md)).
-Every measurement improves the defaults for everyone.
+**Help improve the calibration:** share what vLLM printed on your hardware (see [CONTRIBUTING.md](CONTRIBUTING.md)).
+Measurements from more GPUs and models help refine the defaults for everyone.
+
+## Compatibility
+
+From 1.0, the command-line flags and the fields in `--json` output stay compatible across 1.x
+releases; new options and fields may be added. `--json` prints one object for a single GPU
+(`--gpu` or `--gpu-mem-gib`) and a list of objects, one per GPU, when comparing all GPUs; `speed`
+is `null` when no estimate is available. Memory values are GiB, contexts are tokens. Estimates can change between releases as new
+measurements improve the calibration; the accuracy section above always says what has been measured.
 
 ## Roadmap
 
